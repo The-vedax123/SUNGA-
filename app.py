@@ -144,6 +144,17 @@ def migrate_db():
     )
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            message TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS failed_logins (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
@@ -273,6 +284,47 @@ def log_error(route_name: str, error_message: str):
     db.commit()
     g.error_logged = True
     log_action(user, f"Exception at {normalized_route}: {normalized_message[:120]}")
+
+
+def create_notification(username: str, message: str):
+    if not username or not message:
+        return
+    db = get_db()
+    timestamp = datetime.utcnow().isoformat()
+    db.execute(
+        "INSERT INTO notifications (username, message, is_read, created_at) VALUES (?, ?, 0, ?)",
+        (username, message[:180], timestamp),
+    )
+    db.commit()
+
+
+def fetch_unread_notifications(username: str, limit: int = 5):
+    if not username:
+        return []
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT id, message, created_at
+        FROM notifications
+        WHERE username = ? AND is_read = 0
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (username, limit),
+    ).fetchall()
+    if not rows:
+        return []
+    ids = [str(row["id"]) for row in rows]
+    db.execute(f"UPDATE notifications SET is_read = 1 WHERE id IN ({','.join(['?'] * len(ids))})", ids)
+    db.commit()
+    return [{"message": row["message"], "created_at": row["created_at"]} for row in rows]
+
+
+@app.context_processor
+def inject_unread_notifications():
+    if "username" not in session:
+        return {"unread_notifications": []}
+    return {"unread_notifications": fetch_unread_notifications(session.get("username"))}
 
 
 def validate_username(username: str) -> bool:
@@ -482,6 +534,7 @@ def perform_transaction(sender: str, receiver_wallet: str, amount: float, *, is_
     log_action(sender, f"Transaction risk level calculated: {level}")
     log_action(sender, f"Sent {amount:.2f} tokens to wallet {receiver_wallet}.")
     log_action(receiver_user["username"], f"Received {amount:.2f} tokens from {sender}.")
+    create_notification(receiver_user["username"], f"You received {amount:.2f} SCT from {sender}.")
     evaluate_fraud(sender, amount)
     if is_demo:
         log_action("system", f"Demo transaction: {sender} -> {receiver_wallet}, amount={amount:.2f}")

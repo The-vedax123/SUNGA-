@@ -379,6 +379,33 @@ button:active,
     border: 1px solid var(--border-color);
 }
 
+.notification-bar {
+    margin-bottom: 16px;
+    display: grid;
+    gap: 10px;
+}
+
+.notification-item {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-card);
+    background: var(--card-color);
+    box-shadow: var(--card-shadow);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.notification-item strong {
+    font-size: 13px;
+    letter-spacing: 0.02em;
+}
+
+.notification-item span {
+    font-size: 14px;
+    color: var(--text-color);
+}
+
 /* Green reserved for positive / secure status only */
 .status-secure {
     color: var(--status-positive);

@@ -1,0 +1,10 @@
+{% if unread_notifications %}
+<section class="notification-bar" aria-live="polite">
+    {% for notice in unread_notifications %}
+    <div class="notification-item">
+        <strong>Funds Received</strong>
+        <span>{{ notice["message"] }}</span>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}

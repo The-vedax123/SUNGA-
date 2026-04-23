@@ -35,6 +35,7 @@
             </div>
         </header>
         <main class="wallet-body">
+            {% include "_notifications.html" %}
             <section class="card">
                 <p class="small-muted">Your Wallet Address</p>
                 <p><code id="walletAddress">{{ wallet_address }}</code></p>

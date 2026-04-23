@@ -35,6 +35,7 @@
             </div>
         </header>
         <main class="wallet-body">
+            {% include "_notifications.html" %}
             <section class="card">
                 <h3>Blockchain Verification</h3>
                 <p>Status: <span class="{{ 'status-secure' if chain_valid else 'status-warning' }}">{{ status }}</span></p>

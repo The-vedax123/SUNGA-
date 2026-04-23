@@ -1,0 +1,55 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUNGA Register</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="auth-layout">
+    <div class="auth-container">
+        <div class="auth-theme-toggle">
+            <label class="theme-switch">
+                <input id="themeToggle" type="checkbox">
+                <span>Light mode</span>
+            </label>
+        </div>
+        <section class="card">
+            <h1 class="brand">SUNGA</h1>
+            <h3>Create Wallet Account</h3>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endwith %}
+            <form method="POST">
+                <label>Full Name</label><input name="full_name" type="text" required maxlength="80">
+                <label>Username</label><input name="username" type="text" required maxlength="30" pattern="[A-Za-z0-9_]+">
+                <label>Email</label><input name="email" type="email" required maxlength="120">
+                <label>Phone Number</label><input id="phone" name="phone" type="text" required maxlength="20" pattern="[0-9+\-\s]{7,20}">
+                <label>Password</label><input id="password" name="password" type="password" required minlength="8">
+                <p id="passwordStrength" class="status-attention">Strength: Weak</p>
+                <label>Confirm Password</label><input id="confirm_password" name="confirm_password" type="password" required minlength="8">
+                <p id="confirmPasswordMsg" class="status-attention">Confirm password to continue.</p>
+                <button type="submit">Create Account</button>
+            </form>
+            <p>Already registered? <a href="{{ url_for('login') }}">Sign in</a></p>
+        </section>
+    </div>
+<script>
+const themeToggle = document.getElementById("themeToggle");
+const savedTheme = localStorage.getItem("theme") || "dark";
+document.body.classList.toggle("light", savedTheme === "light");
+themeToggle.checked = savedTheme === "light";
+themeToggle.addEventListener("change", () => {
+    const theme = themeToggle.checked ? "light" : "dark";
+    document.body.classList.toggle("light", theme === "light");
+    localStorage.setItem("theme", theme);
+});
+const p=document.getElementById("password"),c=document.getElementById("confirm_password"),i=document.getElementById("passwordStrength"),m=document.getElementById("confirmPasswordMsg");
+p.addEventListener("input",()=>{let s="Weak",cls="status-warning"; if(p.value.length>=8&&/[0-9]/.test(p.value)&&/[^A-Za-z0-9]/.test(p.value)){s="Strong";cls="status-secure";} else if(p.value.length>=8){s="Medium";cls="status-attention";} i.className=cls;i.textContent=`Strength: ${s}`;});
+function sync(){if(!c.value){m.className="status-attention";m.textContent="Confirm password to continue.";} else if(c.value===p.value){m.className="status-secure";m.textContent="Passwords match.";} else {m.className="status-warning";m.textContent="Passwords do not match.";}}
+p.addEventListener("input",sync); c.addEventListener("input",sync);
+</script>
+</body>
+</html>

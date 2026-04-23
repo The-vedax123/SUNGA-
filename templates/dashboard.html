@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUNGA Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="wallet-app">
+    <aside class="desktop-sidebar">
+        <div class="brand">SUNGA</div>
+        <div class="nav-links">
+            <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}nav-link-active{% endif %}">Home</a>
+            <a href="{{ url_for('send_tokens') }}" class="{% if request.endpoint in ('send_tokens', 'confirm_transfer') %}nav-link-active{% endif %}">Send</a>
+            <a href="{{ url_for('receive') }}" class="{% if request.endpoint == 'receive' %}nav-link-active{% endif %}">Receive</a>
+            <a href="{{ url_for('transactions') }}" class="{% if request.endpoint == 'transactions' %}nav-link-active{% endif %}">Activity</a>
+            <a href="{{ url_for('verify_blockchain') }}" class="{% if request.endpoint == 'verify_blockchain' %}nav-link-active{% endif %}">Security</a>
+            {% if session.get('role') == 'admin' %}
+            <a href="{{ url_for('admin_security') }}" class="{% if request.endpoint == 'admin_security' %}nav-link-active{% endif %}">Admin Security</a>
+            <a href="{{ url_for('admin_dashboard') }}" class="{% if request.endpoint == 'admin_dashboard' %}nav-link-active{% endif %}">Admin</a>
+            {% endif %}
+            <a href="{{ url_for('logout') }}" class="danger-link">Logout</a>
+        </div>
+    </aside>
+    <div class="wallet-main">
+        <header class="wallet-header">
+            <p class="wallet-title">{{ user['username'] }}</p>
+            <div class="header-actions">
+                <label class="theme-switch">
+                    <input id="themeToggle" type="checkbox">
+                    <span>Light mode</span>
+                </label>
+                <a class="btn-inline btn-secondary desktop-only" href="{{ url_for('logout') }}">Logout</a>
+            </div>
+        </header>
+        <main class="wallet-body">
+            <div class="dashboard-grid">
+                <div class="dashboard-main">
+                    <section class="card">
+                        <h3>Wallet Balance</h3>
+                        <p class="balance">{{ "%.2f"|format(user['balance']) }} SCT</p>
+                        <p>Available: <strong>{{ "%.2f"|format(available_balance) }} SCT</strong></p>
+                        <p>Locked: <strong>{{ "%.2f"|format(locked_balance) }} SCT</strong></p>
+                        <p class="small-muted">Release Date: {{ next_release_date[:10] if next_release_date else 'No active lock' }}</p>
+                        <p class="small-muted">Wallet: <code id="walletAddress">{{ user['wallet_address'] }}</code></p>
+                        <button class="btn-inline btn-secondary" type="button" onclick="copyWalletAddress()">Copy Wallet Address</button>
+                        <a class="btn-inline" href="{{ url_for('hold_funds') }}">Hold Funds</a>
+                    </section>
+                    <section class="card">
+                        <h3>Recent Transactions</h3>
+                        <form method="POST" action="{{ url_for('demo_transaction') }}">
+                            <button type="submit">Generate Demo Transaction</button>
+                        </form>
+                        <div class="table-wrap">
+                            <table>
+                                <thead><tr><th>Sender</th><th>Receiver</th><th>Amount</th><th>Time</th></tr></thead>
+                                <tbody>
+                                {% for tx in transactions %}
+                                    <tr>
+                                        <td>{{ tx['sender'] }}</td>
+                                        <td>{{ tx['receiver'] }}</td>
+                                        <td>{{ "%.2f"|format(tx['amount']) }}</td>
+                                        <td>{{ tx['timestamp'] }}</td>
+                                    </tr>
+                                {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+                <aside class="dashboard-side">
+                    <section class="card">
+                        <h3>Security Status</h3>
+                        <p>Blockchain: <span class="{{ 'status-secure' if security_status.blockchain == 'VALID' else 'status-warning' }}">{{ security_status.blockchain }}</span></p>
+                        <p>Session: <span class="status-secure">{{ security_status.session }}</span></p>
+                        <p>Encryption: <span class="status-secure">{{ security_status.encryption }}</span></p>
+                        <p>Fraud Detection: <span class="status-secure">{{ security_status.fraud_detection }}</span></p>
+                        <p>System Health: <span class="{{ 'status-secure' if security_status.system_health == 'SECURE' else 'status-warning' }}">{{ security_status.system_health }}</span></p>
+                    </section>
+                    <section class="card">
+                        <h3>System Information</h3>
+                        <p class="small-muted">SUNGA wallet node active.</p>
+                        <p class="small-muted">Two-factor authentication enabled.</p>
+                        <p class="small-muted">Session timeout policy: 5 minutes.</p>
+                    </section>
+                </aside>
+            </div>
+        </main>
+        <nav class="bottom-nav{% if session.get('role') == 'admin' %} bottom-nav--wide{% endif %}">
+            <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}bottom-nav-active{% endif %}">Home</a>
+            <a href="{{ url_for('send_tokens') }}" class="{% if request.endpoint in ('send_tokens', 'confirm_transfer') %}bottom-nav-active{% endif %}">Send</a>
+            <a href="{{ url_for('receive') }}" class="{% if request.endpoint == 'receive' %}bottom-nav-active{% endif %}">Receive</a>
+            <a href="{{ url_for('transactions') }}" class="{% if request.endpoint == 'transactions' %}bottom-nav-active{% endif %}">Activity</a>
+            <a href="{{ url_for('verify_blockchain') }}" class="{% if request.endpoint == 'verify_blockchain' %}bottom-nav-active{% endif %}">Security</a>
+            {% if session.get('role') == 'admin' %}
+            <a href="{{ url_for('admin_dashboard') }}" class="{% if request.endpoint == 'admin_dashboard' %}bottom-nav-active{% endif %}">Admin</a>
+            {% endif %}
+        </nav>
+    </div>
+</div>
+<div class="toast-container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="toast">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+</div>
+<script>
+const themeToggle = document.getElementById("themeToggle");
+const savedTheme = localStorage.getItem("theme") || "dark";
+document.body.classList.toggle("light", savedTheme === "light");
+themeToggle.checked = savedTheme === "light";
+themeToggle.addEventListener("change", () => {
+  const theme = themeToggle.checked ? "light" : "dark";
+  document.body.classList.toggle("light", theme === "light");
+  localStorage.setItem("theme", theme);
+});
+async function copyWalletAddress() {
+  const walletEl = document.getElementById("walletAddress");
+  const value = walletEl ? walletEl.textContent.trim() : "";
+  if (!value) return;
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const tempInput = document.createElement("textarea");
+      tempInput.value = value;
+      tempInput.setAttribute("readonly", "");
+      tempInput.style.position = "absolute";
+      tempInput.style.left = "-9999px";
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      document.execCommand("copy");
+      document.body.removeChild(tempInput);
+    }
+    alert("Wallet address copied.");
+  } catch (error) {
+    alert("Copy failed. Please copy manually.");
+  }
+}
+</script>
+</body>
+</html>

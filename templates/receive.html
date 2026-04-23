@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Receive Tokens</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="wallet-app">
+    <aside class="desktop-sidebar">
+        <div class="brand">SUNGA</div>
+        <div class="nav-links">
+            <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}nav-link-active{% endif %}">Home</a>
+            <a href="{{ url_for('send_tokens') }}" class="{% if request.endpoint in ('send_tokens', 'confirm_transfer') %}nav-link-active{% endif %}">Send</a>
+            <a href="{{ url_for('receive') }}" class="{% if request.endpoint == 'receive' %}nav-link-active{% endif %}">Receive</a>
+            <a href="{{ url_for('transactions') }}" class="{% if request.endpoint == 'transactions' %}nav-link-active{% endif %}">Activity</a>
+            <a href="{{ url_for('verify_blockchain') }}" class="{% if request.endpoint == 'verify_blockchain' %}nav-link-active{% endif %}">Security</a>
+            {% if session.get('role') == 'admin' %}
+            <a href="{{ url_for('admin_security') }}" class="{% if request.endpoint == 'admin_security' %}nav-link-active{% endif %}">Admin Security</a>
+            <a href="{{ url_for('admin_dashboard') }}" class="{% if request.endpoint == 'admin_dashboard' %}nav-link-active{% endif %}">Admin</a>
+            {% endif %}
+            <a href="{{ url_for('logout') }}" class="danger-link">Logout</a>
+        </div>
+    </aside>
+    <div class="wallet-main">
+        <header class="wallet-header">
+            <p class="wallet-title">Receive Tokens</p>
+            <div class="header-actions">
+                <label class="theme-switch">
+                    <input id="themeToggle" type="checkbox">
+                    <span>Light mode</span>
+                </label>
+                <a class="btn-inline btn-secondary desktop-only" href="{{ url_for('logout') }}">Logout</a>
+            </div>
+        </header>
+        <main class="wallet-body">
+            <section class="card">
+                <p class="small-muted">Your Wallet Address</p>
+                <p><code id="walletAddress">{{ wallet_address }}</code></p>
+                <button class="btn-inline btn-secondary" type="button" onclick="copyAddress()">Copy Address</button>
+                <div class="qr-wrap"><img class="qr-box" src="data:image/png;base64,{{ qr_data }}" alt="Wallet QR Code"></div>
+            </section>
+        </main>
+        <nav class="bottom-nav{% if session.get('role') == 'admin' %} bottom-nav--wide{% endif %}">
+            <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}bottom-nav-active{% endif %}">Home</a>
+            <a href="{{ url_for('send_tokens') }}" class="{% if request.endpoint in ('send_tokens', 'confirm_transfer') %}bottom-nav-active{% endif %}">Send</a>
+            <a href="{{ url_for('receive') }}" class="{% if request.endpoint == 'receive' %}bottom-nav-active{% endif %}">Receive</a>
+            <a href="{{ url_for('transactions') }}" class="{% if request.endpoint == 'transactions' %}bottom-nav-active{% endif %}">Activity</a>
+            <a href="{{ url_for('verify_blockchain') }}" class="{% if request.endpoint == 'verify_blockchain' %}bottom-nav-active{% endif %}">Security</a>
+            {% if session.get('role') == 'admin' %}
+            <a href="{{ url_for('admin_dashboard') }}" class="{% if request.endpoint == 'admin_dashboard' %}bottom-nav-active{% endif %}">Admin</a>
+            {% endif %}
+        </nav>
+    </div>
+</div>
+<script>
+const themeToggle = document.getElementById("themeToggle");
+const savedTheme = localStorage.getItem("theme") || "dark";
+document.body.classList.toggle("light", savedTheme === "light");
+themeToggle.checked = savedTheme === "light";
+themeToggle.addEventListener("change", () => {
+    const theme = themeToggle.checked ? "light" : "dark";
+    document.body.classList.toggle("light", theme === "light");
+    localStorage.setItem("theme", theme);
+});
+async function copyAddress() {
+    const walletEl = document.getElementById("walletAddress");
+    const value = walletEl ? walletEl.textContent.trim() : "";
+    if (!value) return;
+
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(value);
+        } else {
+            const tempInput = document.createElement("textarea");
+            tempInput.value = value;
+            tempInput.setAttribute("readonly", "");
+            tempInput.style.position = "absolute";
+            tempInput.style.left = "-9999px";
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand("copy");
+            document.body.removeChild(tempInput);
+        }
+        alert("Wallet address copied.");
+    } catch (error) {
+        alert("Copy failed. Please copy manually.");
+    }
+}
+</script>
+</body>
+</html>

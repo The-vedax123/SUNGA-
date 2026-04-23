@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hold Funds</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="wallet-app">
+    <aside class="desktop-sidebar">
+        <div class="brand">SUNGA</div>
+        <div class="nav-links">
+            <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}nav-link-active{% endif %}">Home</a>
+            <a href="{{ url_for('send_tokens') }}" class="{% if request.endpoint in ('send_tokens', 'confirm_transfer') %}nav-link-active{% endif %}">Send</a>
+            <a href="{{ url_for('hold_funds') }}" class="{% if request.endpoint == 'hold_funds' %}nav-link-active{% endif %}">Hold Funds</a>
+            <a href="{{ url_for('receive') }}" class="{% if request.endpoint == 'receive' %}nav-link-active{% endif %}">Receive</a>
+            <a href="{{ url_for('transactions') }}" class="{% if request.endpoint == 'transactions' %}nav-link-active{% endif %}">Activity</a>
+            <a href="{{ url_for('verify_blockchain') }}" class="{% if request.endpoint == 'verify_blockchain' %}nav-link-active{% endif %}">Security</a>
+            {% if session.get('role') == 'admin' %}
+            <a href="{{ url_for('admin_security') }}" class="{% if request.endpoint == 'admin_security' %}nav-link-active{% endif %}">Admin Security</a>
+            <a href="{{ url_for('admin_dashboard') }}" class="{% if request.endpoint == 'admin_dashboard' %}nav-link-active{% endif %}">Admin</a>
+            {% endif %}
+            <a href="{{ url_for('logout') }}" class="danger-link">Logout</a>
+        </div>
+    </aside>
+    <div class="wallet-main">
+        <header class="wallet-header">
+            <p class="wallet-title">Hold Funds Until Date</p>
+            <div class="header-actions">
+                <label class="theme-switch">
+                    <input id="themeToggle" type="checkbox">
+                    <span>Light mode</span>
+                </label>
+                <a class="btn-inline btn-secondary desktop-only" href="{{ url_for('logout') }}">Logout</a>
+            </div>
+        </header>
+        <main class="wallet-body">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endwith %}
+            <section class="card">
+                <h3>Balance Overview</h3>
+                <p>Wallet Balance: <strong>{{ "%.2f"|format(user['balance']) }} SCT</strong></p>
+                <p>Available: <strong>{{ "%.2f"|format(available_balance) }} SCT</strong></p>
+                <p>Locked: <strong>{{ "%.2f"|format(locked_balance) }} SCT</strong></p>
+                <p class="small-muted">Release Date: {{ next_release_date[:10] if next_release_date else 'No active lock' }}</p>
+            </section>
+            <form method="POST" class="card">
+                <h3>Hold Funds Form</h3>
+                <label for="amount">Amount</label>
+                <input id="amount" name="amount" type="number" min="0.01" step="0.01" required>
+                <label for="release_date">Release Date</label>
+                <input id="release_date" name="release_date" type="datetime-local" required>
+                <button type="submit">Lock Funds</button>
+            </form>
+            <section class="card">
+                <h3>Locked Funds</h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Amount</th>
+                                <th>Release Date</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for lock in locks %}
+                            <tr>
+                                <td>{{ "%.2f"|format(lock['amount']) }} SCT</td>
+                                <td>{{ lock['release_date'] }}</td>
+                                <td>{{ lock['status'] }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+        <nav class="bottom-nav{% if session.get('role') == 'admin' %} bottom-nav--wide{% endif %}">
+            <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}bottom-nav-active{% endif %}">Home</a>
+            <a href="{{ url_for('send_tokens') }}" class="{% if request.endpoint in ('send_tokens', 'confirm_transfer') %}bottom-nav-active{% endif %}">Send</a>
+            <a href="{{ url_for('hold_funds') }}" class="{% if request.endpoint == 'hold_funds' %}bottom-nav-active{% endif %}">Hold</a>
+            <a href="{{ url_for('receive') }}" class="{% if request.endpoint == 'receive' %}bottom-nav-active{% endif %}">Receive</a>
+            <a href="{{ url_for('transactions') }}" class="{% if request.endpoint == 'transactions' %}bottom-nav-active{% endif %}">Activity</a>
+            <a href="{{ url_for('verify_blockchain') }}" class="{% if request.endpoint == 'verify_blockchain' %}bottom-nav-active{% endif %}">Security</a>
+            {% if session.get('role') == 'admin' %}
+            <a href="{{ url_for('admin_dashboard') }}" class="{% if request.endpoint == 'admin_dashboard' %}bottom-nav-active{% endif %}">Admin</a>
+            {% endif %}
+        </nav>
+    </div>
+</div>
+<script>
+const themeToggle = document.getElementById("themeToggle");
+const savedTheme = localStorage.getItem("theme") || "dark";
+document.body.classList.toggle("light", savedTheme === "light");
+themeToggle.checked = savedTheme === "light";
+themeToggle.addEventListener("change", () => {
+    const theme = themeToggle.checked ? "light" : "dark";
+    document.body.classList.toggle("light", theme === "light");
+    localStorage.setItem("theme", theme);
+});
+</script>
+</body>
+</html>

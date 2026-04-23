@@ -1,0 +1,5 @@
+Flask
+bcrypt
+cryptography
+reportlab
+qrcode

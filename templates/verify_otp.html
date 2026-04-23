@@ -1,0 +1,47 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify OTP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="auth-layout">
+    <div class="auth-container">
+        <div class="auth-theme-toggle">
+            <label class="theme-switch">
+                <input id="themeToggle" type="checkbox">
+                <span>Light mode</span>
+            </label>
+        </div>
+        <section class="card">
+            <h1 class="brand">SUNGA</h1>
+            <h3>Two-Factor Verification</h3>
+            <p class="small-muted">{{ otp_notice }}</p>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            <form method="POST">
+                <label for="otp">Enter 6-digit OTP</label>
+                <input id="otp" name="otp" type="text" maxlength="6" minlength="6" pattern="[0-9]{6}" required>
+                <button type="submit">Verify OTP</button>
+            </form>
+        </section>
+    </div>
+    <script>
+        const themeToggle = document.getElementById("themeToggle");
+        const savedTheme = localStorage.getItem("theme") || "dark";
+        document.body.classList.toggle("light", savedTheme === "light");
+        themeToggle.checked = savedTheme === "light";
+        themeToggle.addEventListener("change", () => {
+            const theme = themeToggle.checked ? "light" : "dark";
+            document.body.classList.toggle("light", theme === "light");
+            localStorage.setItem("theme", theme);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUNGA | Secure Wallet Infrastructure</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="landing-page">
+<div class="landing-wrap">
+    <header class="landing-header">
+        <div class="landing-brand">SUNGA</div>
+        <div class="landing-actions">
+            <label class="theme-switch">
+                <input id="themeToggle" type="checkbox">
+                <span>Light mode</span>
+            </label>
+            <a class="btn-inline btn-secondary" href="{{ url_for('login') }}">Login</a>
+            <a class="btn-inline" href="{{ url_for('register') }}">Get Started</a>
+        </div>
+    </header>
+
+    <main class="landing-main">
+        <section class="landing-hero card">
+            <p class="landing-eyebrow">Digital Trust for Modern Finance</p>
+            <h1>Secure money movement with <span>SUNGA</span>.</h1>
+            <p class="landing-subtitle">
+                SUNGA provides wallet protection, transaction integrity, two-factor authentication,
+                and timed fund controls for safer financial operations.
+            </p>
+            <div class="landing-cta-row">
+                <a class="btn-inline" href="{{ url_for('register') }}">Create an Account</a>
+                <a class="btn-inline btn-secondary" href="{{ url_for('login') }}">Access Wallet</a>
+            </div>
+        </section>
+
+        <section class="landing-features">
+            <article class="card landing-feature-card">
+                <h3>Account Security</h3>
+                <p>Mandatory OTP verification and session controls reduce unauthorized access risk.</p>
+            </article>
+            <article class="card landing-feature-card">
+                <h3>Blockchain Verification</h3>
+                <p>Transactions are hash-linked and continuously validated to preserve integrity.</p>
+            </article>
+            <article class="card landing-feature-card">
+                <h3>Timed Fund Lock</h3>
+                <p>Hold funds until a selected release date to improve spending control and planning.</p>
+            </article>
+            <article class="card landing-feature-card">
+                <h3>Audit Visibility</h3>
+                <p>Built-in activity logs, security insights, and reporting support transparent oversight.</p>
+            </article>
+        </section>
+
+        <section class="landing-trust card">
+            <h2>Security-first by design</h2>
+            <div class="landing-trust-grid">
+                <div>
+                    <h4>Authentication</h4>
+                    <p>Password plus OTP-based login verification.</p>
+                </div>
+                <div>
+                    <h4>Fraud Monitoring</h4>
+                    <p>Threshold-based suspicious activity detection and alerting.</p>
+                </div>
+                <div>
+                    <h4>Data Protection</h4>
+                    <p>Sensitive transaction fields protected with encryption.</p>
+                </div>
+                <div>
+                    <h4>Operational Reliability</h4>
+                    <p>Role-based access and admin security reporting for governance.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="landing-footer">
+        <p>© {{ 2026 }} SUNGA. Secure wallet infrastructure.</p>
+        <div class="landing-footer-links">
+            <a href="{{ url_for('login') }}">Login</a>
+            <a href="{{ url_for('register') }}">Register</a>
+            <a href="{{ url_for('system_architecture') }}">Architecture</a>
+        </div>
+    </footer>
+</div>
+<script>
+const themeToggle = document.getElementById("themeToggle");
+const savedTheme = localStorage.getItem("theme") || "dark";
+document.body.classList.toggle("light", savedTheme === "light");
+themeToggle.checked = savedTheme === "light";
+themeToggle.addEventListener("change", () => {
+    const theme = themeToggle.checked ? "light" : "dark";
+    document.body.classList.toggle("light", theme === "light");
+    localStorage.setItem("theme", theme);
+});
+</script>
+</body>
+</html>

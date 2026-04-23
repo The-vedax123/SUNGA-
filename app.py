@@ -19,8 +19,10 @@ from reportlab.pdfgen import canvas
 from blockchain import Blockchain
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_PATH = os.path.join(BASE_DIR, "database.db")
-FERNET_KEY_PATH = os.path.join(BASE_DIR, "fernet.key")
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+DATA_DIR = os.environ.get("DATA_DIR", "/tmp" if IS_VERCEL else BASE_DIR)
+DATABASE_PATH = os.path.join(DATA_DIR, "database.db")
+FERNET_KEY_PATH = os.path.join(DATA_DIR, "fernet.key")
 SESSION_TIMEOUT_MINUTES = 5
 OTP_EXPIRY_MINUTES = 2
 DEFAULT_STARTING_BALANCE = 100.0
@@ -38,6 +40,7 @@ def get_or_create_fernet_key() -> str:
     env_key = os.environ.get("FERNET_KEY")
     if env_key:
         return env_key
+    os.makedirs(DATA_DIR, exist_ok=True)
     if os.path.exists(FERNET_KEY_PATH):
         with open(FERNET_KEY_PATH, "r", encoding="utf-8") as key_file:
             return key_file.read().strip()
@@ -50,6 +53,7 @@ def get_or_create_fernet_key() -> str:
 fernet_key = get_or_create_fernet_key()
 fernet = Fernet(fernet_key.encode("utf-8"))
 blockchain = Blockchain()
+BOOTSTRAPPED = False
 
 
 def get_db():
@@ -590,7 +594,7 @@ def fetch_user_transactions(username: str):
 def index():
     if "username" in session:
         return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
+    return render_template("landing.html")
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -1183,12 +1187,16 @@ def handle_exception(error):
 
 
 def bootstrap():
+    global BOOTSTRAPPED
+    if BOOTSTRAPPED:
+        return
     with app.app_context():
         init_db()
         releaseExpiredFunds()
         load_blockchain_from_db()
         if not blockchain.verify_chain():
             log_action("system", "WARNING: Blockchain integrity check failed during startup.")
+    BOOTSTRAPPED = True
 
 
 if __name__ == "__main__":

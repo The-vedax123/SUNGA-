@@ -21,7 +21,7 @@
     </header>
 
     <main class="landing-main">
-        <section class="landing-hero card">
+        <section class="landing-hero card landing-hero--with-bg">
             <div class="landing-hero-grid">
                 <div class="landing-hero-content">
                     <p class="landing-eyebrow">Digital Trust for Modern Finance</p>
@@ -35,18 +35,8 @@
                         <a class="btn-inline landing-btn-secondary" href="{{ url_for('login') }}">Access Wallet</a>
                     </div>
                 </div>
-                <div class="landing-hero-image" aria-hidden="true">
-                    <svg viewBox="0 0 640 420" role="img">
-                        <rect x="40" y="55" width="560" height="310" rx="28" fill="currentColor" opacity="0.06"></rect>
-                        <rect x="95" y="110" width="450" height="210" rx="24" fill="none" stroke="currentColor" opacity="0.24" stroke-width="2"></rect>
-                        <rect x="145" y="150" width="350" height="130" rx="18" fill="none" stroke="currentColor" opacity="0.42" stroke-width="2"></rect>
-                        <circle cx="185" cy="215" r="28" fill="none" stroke="currentColor" opacity="0.7" stroke-width="2"></circle>
-                        <path d="M173 216h24m-12-12v24" stroke="currentColor" opacity="0.8" stroke-width="2" stroke-linecap="round"></path>
-                        <rect x="238" y="188" width="220" height="12" rx="6" fill="currentColor" opacity="0.5"></rect>
-                        <rect x="238" y="214" width="165" height="12" rx="6" fill="currentColor" opacity="0.34"></rect>
-                        <rect x="238" y="241" width="120" height="10" rx="5" fill="currentColor" opacity="0.24"></rect>
-                        <path d="M510 123l34-34m-8 0h8v8" stroke="currentColor" opacity="0.42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-                    </svg>
+                <div class="landing-hero-image landing-hero-image--foreground">
+                    <img src="{{ url_for('static', filename='landing-wallet.png') }}" alt="Digital wallet payment preview">
                 </div>
             </div>
         </section>

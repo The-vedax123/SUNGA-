@@ -821,6 +821,40 @@ textarea:focus-visible {
 
 .landing-hero {
     padding: 24px;
+    position: relative;
+    overflow: hidden;
+}
+
+.landing-hero--with-bg::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: url("/static/landing-wallet.png");
+    background-size: cover;
+    background-position: center;
+    opacity: 0.12;
+    pointer-events: none;
+}
+
+.landing-hero--with-bg::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(0, 0, 0, 0.76) 25%, rgba(0, 0, 0, 0.38) 100%);
+    pointer-events: none;
+}
+
+body.light .landing-hero--with-bg::after {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.82) 20%, rgba(255, 255, 255, 0.55) 100%);
+}
+
+.landing-hero--with-bg .landing-hero-grid {
+    position: relative;
+    z-index: 1;
+}
+
+.landing-hero-image--foreground {
+    opacity: 0.85;
 }
 
 .landing-hero-grid {
@@ -848,6 +882,14 @@ textarea:focus-visible {
     max-width: 100%;
     display: block;
     color: var(--text-color);
+}
+
+.landing-hero-image img {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 12px;
 }
 
 .landing-eyebrow {

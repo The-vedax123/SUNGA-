@@ -15,6 +15,11 @@ from flask import Flask, flash, g, jsonify, make_response, redirect, render_temp
 import qrcode
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+try:
+    import psycopg2
+    import psycopg2.extras
+except ImportError:
+    psycopg2 = None
 
 from blockchain import Blockchain
 
@@ -22,6 +27,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IS_VERCEL = os.environ.get("VERCEL") == "1"
 DATA_DIR = os.environ.get("DATA_DIR", "/tmp" if IS_VERCEL else BASE_DIR)
 DATABASE_PATH = os.path.join(DATA_DIR, "database.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
+if USE_POSTGRES and psycopg2 is None:
+    raise RuntimeError("DATABASE_URL points to Postgres but psycopg2 is not installed.")
 FERNET_KEY_PATH = os.path.join(DATA_DIR, "fernet.key")
 SESSION_TIMEOUT_MINUTES = 5
 OTP_EXPIRY_MINUTES = 2
@@ -56,10 +65,37 @@ blockchain = Blockchain()
 BOOTSTRAPPED = False
 
 
+def _qmark_to_pyformat(query: str) -> str:
+    if "?" not in query:
+        return query
+    parts = query.split("?")
+    return "%s".join(parts)
+
+
+class PostgresCompatDB:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, query, params=()):
+        cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cursor.execute(_qmark_to_pyformat(query), params)
+        return cursor
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DATABASE_PATH)
-        g.db.row_factory = sqlite3.Row
+        if USE_POSTGRES:
+            conn = psycopg2.connect(DATABASE_URL)
+            g.db = PostgresCompatDB(conn)
+        else:
+            g.db = sqlite3.connect(DATABASE_PATH)
+            g.db.row_factory = sqlite3.Row
     return g.db
 
 
@@ -80,7 +116,17 @@ def disable_browser_cache(response):
 
 def get_columns(table_name: str) -> set:
     db = get_db()
-    rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    if USE_POSTGRES:
+        rows = db.execute(
+            """
+            SELECT column_name AS name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ?
+            """,
+            (table_name,),
+        ).fetchall()
+    else:
+        rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
 
 
@@ -89,6 +135,8 @@ def wallet_address() -> str:
 
 
 def migrate_db():
+    if USE_POSTGRES:
+        return
     db = get_db()
     user_cols = get_columns("users")
     if "wallet_address" not in user_cols:
@@ -180,6 +228,111 @@ def migrate_db():
 
 def init_db():
     db = get_db()
+    if USE_POSTGRES:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('admin', 'student')),
+                balance DOUBLE PRECISION NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                wallet_address TEXT,
+                full_name TEXT,
+                email TEXT,
+                phone TEXT,
+                status TEXT DEFAULT 'Active',
+                locked_until TEXT
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transactions (
+                id SERIAL PRIMARY KEY,
+                sender TEXT,
+                receiver TEXT,
+                amount_enc TEXT,
+                sender_enc TEXT,
+                receiver_enc TEXT,
+                fee_amount DOUBLE PRECISION DEFAULT 0,
+                hash TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS logs (
+                id SERIAL PRIMARY KEY,
+                user TEXT NOT NULL,
+                action TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alerts (
+                id SERIAL PRIMARY KEY,
+                user TEXT NOT NULL,
+                amount DOUBLE PRECISION NOT NULL,
+                reason TEXT NOT NULL,
+                severity TEXT,
+                timestamp TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS error_logs (
+                id SERIAL PRIMARY KEY,
+                user TEXT NOT NULL,
+                route TEXT NOT NULL,
+                error_message TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS failed_logins (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                ip_address TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS locked_funds (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER,
+                amount DECIMAL(10,2),
+                release_date TEXT,
+                status TEXT DEFAULT 'locked',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id SERIAL PRIMARY KEY,
+                username TEXT NOT NULL,
+                message TEXT NOT NULL,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        db.commit()
+        seed_admin()
+        backfill_wallet_addresses()
+        migrate_transaction_encryption()
+        return
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -831,6 +984,7 @@ def dashboard():
 
 @app.route("/send", methods=["GET", "POST"])
 @login_required
+@role_required("student")
 def send_tokens():
     releaseExpiredFunds()
     sender_row = get_db().execute("SELECT wallet_address FROM users WHERE username = ?", (session["username"],)).fetchone()
@@ -867,6 +1021,7 @@ def send_tokens():
 
 @app.route("/send/confirm", methods=["GET", "POST"])
 @login_required
+@role_required("student")
 def confirm_transfer():
     releaseExpiredFunds()
     pending = session.get("pending_transfer")
@@ -1058,6 +1213,7 @@ def system_architecture():
 
 @app.route("/receive")
 @login_required
+@role_required("student")
 def receive():
     db = get_db()
     user = db.execute("SELECT wallet_address FROM users WHERE username = ?", (session["username"],)).fetchone()

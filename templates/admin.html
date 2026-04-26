@@ -1,14 +1,17 @@
 ﻿<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Admin Dashboard</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
 <body>
 <div class="app-shell">
     <aside class="sidebar" id="sidebar">
         <div class="brand">SUNGA</div>
         <div class="nav-links">
             <a href="{{ url_for('dashboard') }}" class="{% if request.endpoint == 'dashboard' %}nav-link-active{% endif %}">Home</a>
-            <a href="{{ url_for('send_tokens') }}" class="{% if request.endpoint in ('send_tokens', 'confirm_transfer') %}nav-link-active{% endif %}">Send</a>
-            <a href="{{ url_for('receive') }}" class="{% if request.endpoint == 'receive' %}nav-link-active{% endif %}">Receive</a>
             <a href="{{ url_for('transactions') }}" class="{% if request.endpoint == 'transactions' %}nav-link-active{% endif %}">Activity</a>
             <a href="{{ url_for('verify_blockchain') }}" class="{% if request.endpoint == 'verify_blockchain' %}nav-link-active{% endif %}">Security</a>
             <a href="{{ url_for('admin_security') }}" class="{% if request.endpoint == 'admin_security' %}nav-link-active{% endif %}">Admin Security</a>
@@ -32,12 +35,143 @@
         <main class="content">
             <div class="container">
                 <div class="card-grid">
-                    <section class="card"><h3>Blockchain</h3><p class="{{ 'status-secure' if chain_valid else 'status-warning' }}">{{ "VALID" if chain_valid else "TAMPERED" }}</p><p class="small-muted">Length: {{ chain_length }}</p></section>
-                    <section class="card"><h3>Failed Logins</h3><p class="balance">{{ failed_count }}</p></section>
-                    <section class="card"><h3>Suspicious Activities</h3><p class="balance">{{ suspicious_count }}</p></section>
+                    <section class="card">
+                        <h3>Blockchain</h3>
+                        <p class="{{ 'status-secure' if chain_valid else 'status-warning' }}">{{ "VALID" if chain_valid else "TAMPERED" }}</p>
+                        <p class="small-muted">Length: {{ chain_length }}</p>
+                    </section>
+                    <section class="card">
+                        <h3>Total Users</h3>
+                        <p class="balance">{{ total_users }}</p>
+                        <p class="small-muted">Admins: {{ admin_count }} | Students: {{ student_count }}</p>
+                    </section>
+                    <section class="card">
+                        <h3>Total Transactions</h3>
+                        <p class="balance">{{ total_transactions }}</p>
+                        <p class="small-muted">Volume: {{ "%.2f"|format(total_volume) }} SCT</p>
+                    </section>
+                    <section class="card">
+                        <h3>Total Balance</h3>
+                        <p class="balance">{{ "%.2f"|format(total_balance) }}</p>
+                    </section>
+                    <section class="card">
+                        <h3>Failed Logins</h3>
+                        <p class="balance">{{ failed_count }}</p>
+                    </section>
+                    <section class="card">
+                        <h3>Suspicious Activities</h3>
+                        <p class="balance">{{ suspicious_count }}</p>
+                    </section>
                 </div>
-                <section class="card"><h3>Recent Security Alerts</h3><div class="table-wrap"><table><thead><tr><th>User</th><th>Amount</th><th>Reason</th><th>Severity</th><th>Time</th></tr></thead><tbody>{% for alert in alerts %}<tr class="alert-row"><td>{{ alert['user'] }}</td><td>{{ "%.2f"|format(alert['amount']) }}</td><td>{{ alert['reason'] }}</td><td>{{ alert['severity'] }}</td><td>{{ alert['timestamp'] }}</td></tr>{% endfor %}</tbody></table></div></section>
-                <section class="card"><h3>Users</h3><div class="table-wrap"><table><thead><tr><th>Username</th><th>Role</th><th>Balance</th><th>Wallet</th></tr></thead><tbody>{% for user in users %}<tr><td>{{ user['username'] }}</td><td>{{ user['role'] }}</td><td>{{ "%.2f"|format(user['balance']) }}</td><td>{{ user['wallet_address'] }}</td></tr>{% endfor %}</tbody></table></div></section>
+
+                <section class="card">
+                    <h3>Recent Security Alerts</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>User</th><th>Amount</th><th>Reason</th><th>Severity</th><th>Time</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for alert in alerts %}
+                                <tr class="alert-row">
+                                    <td>{{ alert['user'] }}</td>
+                                    <td>{{ "%.2f"|format(alert['amount']) }}</td>
+                                    <td>{{ alert['reason'] }}</td>
+                                    <td>{{ alert['severity'] }}</td>
+                                    <td>{{ alert['timestamp'] }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <h3>Recent Transactions (Overall)</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>Sender</th><th>Receiver</th><th>Amount</th><th>Hash</th><th>Timestamp</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for tx in transactions[:100] %}
+                                <tr>
+                                    <td>{{ tx['sender'] }}</td>
+                                    <td>{{ tx['receiver'] }}</td>
+                                    <td>{{ "%.2f"|format(tx['amount']) }}</td>
+                                    <td class="small-hash">{{ tx['hash'][:12] }}...</td>
+                                    <td>{{ tx['timestamp'] }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <h3>Users</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>Username</th><th>Role</th><th>Status</th><th>Balance</th><th>Wallet</th><th>Created</th><th>Action</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for user in users %}
+                                <tr>
+                                    <td>{{ user['username'] }}</td>
+                                    <td>{{ user['role'] }}</td>
+                                    <td>{{ user['status'] }}</td>
+                                    <td>{{ "%.2f"|format(user['balance']) }}</td>
+                                    <td>{{ user['wallet_address'] }}</td>
+                                    <td>{{ user['created_at'] }}</td>
+                                    <td>
+                                        {% if user['status'] == 'Active' and user['role'] != 'admin' %}
+                                        <form method="POST" action="{{ url_for('suspend_user', username=user['username']) }}">
+                                            <button class="btn-secondary" type="submit">Suspend</button>
+                                        </form>
+                                        {% elif user['status'] != 'Active' %}
+                                        <form method="POST" action="{{ url_for('activate_user', username=user['username']) }}">
+                                            <button type="submit">Activate</button>
+                                        </form>
+                                        {% else %}
+                                        -
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="card">
+                    <h3>System Activity Timeline (Latest 50)</h3>
+                    <ul class="timeline">
+                        {% for item in timeline %}
+                        <li><strong>{{ item['timestamp'] }}</strong> - {{ item['user'] }}: {{ item['action'] }}</li>
+                        {% endfor %}
+                    </ul>
+                </section>
+
+                <section class="card">
+                    <h3>Detailed Logs (Latest 200)</h3>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>User</th><th>Action</th><th>Timestamp</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for row in logs %}
+                                <tr>
+                                    <td>{{ row['user'] }}</td>
+                                    <td>{{ row['action'] }}</td>
+                                    <td>{{ row['timestamp'] }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
         </main>
     </div>

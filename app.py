@@ -1,10 +1,8 @@
 import io
 import os
-import random
 import re
 import sqlite3
 import traceback
-import uuid
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -22,6 +20,17 @@ except ImportError:
     psycopg2 = None
 
 from blockchain import Blockchain
+from backup import create_encrypted_backup, recover_encrypted_backup
+from security import generate_otp as generate_secure_otp
+from security import generate_wallet_address, utc_now_iso
+from validation import (
+    validate_amount,
+    validate_email,
+    validate_password,
+    validate_phone,
+    validate_username as validate_username_input,
+    validate_wallet_address as validate_wallet_input,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 IS_VERCEL = os.environ.get("VERCEL") == "1"
@@ -32,6 +41,7 @@ USE_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith
 if USE_POSTGRES and psycopg2 is None:
     raise RuntimeError("DATABASE_URL points to Postgres but psycopg2 is not installed.")
 FERNET_KEY_PATH = os.path.join(DATA_DIR, "fernet.key")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 SESSION_TIMEOUT_MINUTES = 5
 OTP_EXPIRY_MINUTES = 2
 DEFAULT_STARTING_BALANCE = 100.0
@@ -131,7 +141,17 @@ def get_columns(table_name: str) -> set:
 
 
 def wallet_address() -> str:
-    return f"0x{uuid.uuid4().hex[:10].upper()}"
+    return generate_wallet_address()
+
+
+def generate_unique_wallet_address() -> str:
+    db = get_db()
+    for _ in range(20):
+        candidate = wallet_address()
+        exists = db.execute("SELECT id FROM users WHERE wallet_address = ?", (candidate,)).fetchone()
+        if not exists:
+            return candidate
+    raise RuntimeError("Unable to generate a unique wallet address.")
 
 
 def migrate_db():
@@ -164,6 +184,8 @@ def migrate_db():
         db.execute("ALTER TABLE transactions ADD COLUMN receiver_enc TEXT")
     if "fee_amount" not in tx_cols:
         db.execute("ALTER TABLE transactions ADD COLUMN fee_amount REAL DEFAULT 0")
+    if "status" not in tx_cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'completed'")
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS alerts (
@@ -258,7 +280,8 @@ def init_db():
                 receiver_enc TEXT,
                 fee_amount DOUBLE PRECISION DEFAULT 0,
                 hash TEXT NOT NULL,
-                timestamp TEXT NOT NULL
+                timestamp TEXT NOT NULL,
+                status TEXT DEFAULT 'completed'
             )
             """
         )
@@ -359,7 +382,8 @@ def init_db():
             amount_enc TEXT,
             fee_amount REAL DEFAULT 0,
             hash TEXT NOT NULL,
-            timestamp TEXT NOT NULL
+            timestamp TEXT NOT NULL,
+            status TEXT DEFAULT 'completed'
         )
         """
     )
@@ -401,7 +425,7 @@ def seed_admin():
     password_hash = bcrypt.hashpw("admin123!".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     db.execute(
         "INSERT INTO users (username, password_hash, role, balance, created_at, wallet_address) VALUES (?, ?, ?, ?, ?, ?)",
-        ("admin", password_hash, "admin", 1000.0, created_at, wallet_address()),
+        ("admin", password_hash, "admin", 1000.0, created_at, generate_unique_wallet_address()),
     )
     db.commit()
     log_action("system", "Seeded default admin account.")
@@ -411,13 +435,13 @@ def backfill_wallet_addresses():
     db = get_db()
     users = db.execute("SELECT id FROM users WHERE wallet_address IS NULL OR wallet_address = ''").fetchall()
     for user in users:
-        db.execute("UPDATE users SET wallet_address = ? WHERE id = ?", (wallet_address(), user["id"]))
+        db.execute("UPDATE users SET wallet_address = ? WHERE id = ?", (generate_unique_wallet_address(), user["id"]))
     db.commit()
 
 
 def log_action(user: str, action: str):
     db = get_db()
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = utc_now_iso()
     db.execute("INSERT INTO logs (user, action, timestamp) VALUES (?, ?, ?)", (user, action, timestamp))
     db.commit()
 
@@ -481,15 +505,13 @@ def inject_unread_notifications():
 
 
 def validate_username(username: str) -> bool:
-    if not username:
-        return False
-    if len(username) < 3 or len(username) > 30:
-        return False
-    return username.replace("_", "").isalnum()
+    valid, _ = validate_username_input(username)
+    return valid
 
 
 def validate_wallet_address(address: str) -> bool:
-    return bool(address) and address.startswith("0x") and 10 <= len(address) <= 20 and re.fullmatch(r"0x[A-Za-z0-9]+", address)
+    valid, _ = validate_wallet_input(address)
+    return valid
 
 
 def encrypt_value(raw: str) -> str:
@@ -525,11 +547,13 @@ def decrypt_row(row) -> dict:
     except ValueError:
         return None
     return {
+        "id": row["id"] if "id" in row.keys() else None,
         "sender": sender,
         "receiver": receiver,
         "amount": amount,
         "hash": row["hash"],
         "timestamp": row["timestamp"],
+        "status": row["status"] if "status" in row.keys() else "completed",
     }
 
 
@@ -553,7 +577,7 @@ def migrate_transaction_encryption():
         sender_enc, receiver_enc, amount_enc = encrypt_transaction_fields(row["sender"], row["receiver"], amount_plain)
         db.execute(
             "UPDATE transactions SET sender_enc = ?, receiver_enc = ?, amount_enc = ?, sender = ?, receiver = ? WHERE id = ?",
-            (sender_enc, receiver_enc, amount_enc, sender_enc, receiver_enc, row["id"]),
+            (sender_enc, receiver_enc, amount_enc, row["sender"], row["receiver"], row["id"]),
         )
     db.commit()
 
@@ -676,8 +700,8 @@ def perform_transaction(sender: str, receiver_wallet: str, amount: float, *, is_
         db.execute("UPDATE users SET balance = balance - ? WHERE username = ?", (total, sender))
         db.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (amount, receiver_user["username"]))
         db.execute(
-            "INSERT INTO transactions (sender, receiver, sender_enc, receiver_enc, amount_enc, fee_amount, hash, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (sender_enc, receiver_enc, sender_enc, receiver_enc, amount_enc, fee, tx_block.block_hash, timestamp),
+            "INSERT INTO transactions (sender, receiver, sender_enc, receiver_enc, amount_enc, fee_amount, hash, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (sender, receiver_user["username"], sender_enc, receiver_enc, amount_enc, fee, tx_block.block_hash, timestamp, "completed"),
         )
         db.commit()
     except sqlite3.Error:
@@ -769,7 +793,7 @@ def evaluate_fraud(sender: str, amount: float):
 
 
 def generate_otp() -> str:
-    return f"{random.randint(100000, 999999)}"
+    return generate_secure_otp()
 
 
 def finalize_login(username: str, role: str):
@@ -783,7 +807,13 @@ def finalize_login(username: str, role: str):
 def fetch_user_transactions(username: str):
     db = get_db()
     rows = db.execute(
-        "SELECT sender_enc, receiver_enc, amount_enc, hash, timestamp FROM transactions ORDER BY id DESC"
+        """
+        SELECT id, sender, receiver, sender_enc, receiver_enc, amount_enc, hash, timestamp, status
+        FROM transactions
+        WHERE sender = ? OR receiver = ?
+        ORDER BY timestamp DESC
+        """,
+        (username, username),
     ).fetchall()
     txs = []
     for row in rows:
@@ -791,8 +821,7 @@ def fetch_user_transactions(username: str):
         if tx is None:
             continue
         tx["risk_level"] = risk_level(tx["amount"])
-        if tx["sender"] == username or tx["receiver"] == username:
-            txs.append(tx)
+        txs.append(tx)
     return txs
 
 
@@ -815,17 +844,21 @@ def register():
         if not full_name or not username or not email or not phone or not password or not confirm_password:
             flash("All fields are required.", "error")
             return render_template("register.html")
-        if not validate_username(username):
-            flash("Username must be 3-30 chars and alphanumeric/underscore only.", "error")
+        username_ok, username_error = validate_username_input(username)
+        if not username_ok:
+            flash(username_error, "error")
             return render_template("register.html")
-        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-            flash("Invalid email format.", "error")
+        email_ok, email_error = validate_email(email)
+        if not email_ok:
+            flash(email_error, "error")
             return render_template("register.html")
-        if not re.fullmatch(r"[0-9+\-\s]{7,20}", phone):
-            flash("Phone must be 7-20 digits and may include + or -.", "error")
+        phone_ok, phone_error = validate_phone(phone)
+        if not phone_ok:
+            flash(phone_error, "error")
             return render_template("register.html")
-        if len(password) < 8:
-            flash("Password must be at least 8 characters.", "error")
+        password_ok, password_error = validate_password(password)
+        if not password_ok:
+            flash(password_error, "error")
             return render_template("register.html")
         if password != confirm_password:
             flash("Password confirmation does not match.", "error")
@@ -848,7 +881,7 @@ def register():
                 "student",
                 DEFAULT_STARTING_BALANCE,
                 datetime.utcnow().isoformat(),
-                wallet_address(),
+                generate_unique_wallet_address(),
                 None,
             ),
         )
@@ -865,7 +898,10 @@ def login():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         db = get_db()
-        user = db.execute("SELECT username, password_hash, role, locked_until FROM users WHERE username = ?", (username,)).fetchone()
+        user = db.execute(
+            "SELECT username, password_hash, role, locked_until, status FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
         if not user:
             track_failed_login(username or "unknown")
             log_action(username or "unknown", "Login failure: unknown username.")
@@ -873,6 +909,9 @@ def login():
             return render_template("login.html")
         if is_account_locked(user):
             flash("Account temporarily locked due to multiple failed login attempts.", "error")
+            return render_template("login.html")
+        if user["status"] != "Active":
+            flash("Account is currently suspended. Contact admin.", "error")
             return render_template("login.html")
         valid_password = bcrypt.checkpw(password.encode("utf-8"), user["password_hash"].encode("utf-8"))
         if not valid_password:
@@ -889,9 +928,52 @@ def login():
         session["otp_username"] = user["username"]
         session["otp_role"] = user["role"]
         session["otp_notice"] = f"Mock email OTP sent: {otp}"
+        session["otp_next"] = url_for("dashboard")
         log_action(username, "OTP generated for login.")
         return redirect(url_for("verify_otp"))
     return render_template("login.html")
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        db = get_db()
+        user = db.execute(
+            "SELECT username, password_hash, role, locked_until, status FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if not user or user["role"] != "admin":
+            track_failed_login(username or "unknown")
+            log_action(username or "unknown", "Admin login failure: invalid account.")
+            flash("Invalid admin credentials.", "error")
+            return render_template("admin_login.html")
+        if user["status"] != "Active":
+            flash("Admin account is not active.", "error")
+            return render_template("admin_login.html")
+        if is_account_locked(user):
+            flash("Account temporarily locked due to multiple failed login attempts.", "error")
+            return render_template("admin_login.html")
+        valid_password = bcrypt.checkpw(password.encode("utf-8"), user["password_hash"].encode("utf-8"))
+        if not valid_password:
+            track_failed_login(username)
+            log_action(username, "Admin login failure: wrong password.")
+            flash("Invalid admin credentials.", "error")
+            return render_template("admin_login.html")
+
+        otp = generate_otp()
+        db.execute("UPDATE users SET locked_until = NULL WHERE username = ?", (username,))
+        db.commit()
+        session["otp_code"] = otp
+        session["otp_expiry"] = (datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)).isoformat()
+        session["otp_username"] = user["username"]
+        session["otp_role"] = user["role"]
+        session["otp_notice"] = f"Mock email OTP sent: {otp}"
+        session["otp_next"] = url_for("admin_dashboard")
+        log_action(username, "OTP generated for admin login.")
+        return redirect(url_for("verify_otp"))
+    return render_template("admin_login.html")
 
 
 @app.route("/verify-otp", methods=["GET", "POST"])
@@ -925,7 +1007,7 @@ def verify_otp():
         finalize_login(username, role)
         log_action(username, "Successful login with OTP.")
         flash("Login successful.", "success")
-        return redirect(url_for("dashboard"))
+        return redirect(session.pop("otp_next", url_for("dashboard")))
     return render_template("verify_otp.html", otp_notice=session.get("otp_notice"))
 
 
@@ -987,20 +1069,23 @@ def dashboard():
 @role_required("student")
 def send_tokens():
     releaseExpiredFunds()
-    sender_row = get_db().execute("SELECT wallet_address FROM users WHERE username = ?", (session["username"],)).fetchone()
+    db = get_db()
+    sender_row = db.execute("SELECT id, wallet_address FROM users WHERE username = ?", (session["username"],)).fetchone()
     if request.method == "POST":
         recipient_wallet_address = request.form.get("recipient_wallet_address", "").strip()
         amount_raw = request.form.get("amount", "").strip()
-        if not validate_wallet_address(recipient_wallet_address):
-            flash("Invalid wallet address", "error")
+        wallet_ok, wallet_error = validate_wallet_input(recipient_wallet_address)
+        if not wallet_ok:
+            flash(wallet_error, "error")
             return render_template("send.html", sender_wallet=sender_row["wallet_address"])
-        try:
-            amount = float(amount_raw)
-        except ValueError:
-            flash("Amount must be a valid number.", "error")
+        receiver_exists = db.execute("SELECT id FROM users WHERE wallet_address = ?", (recipient_wallet_address,)).fetchone()
+        if not receiver_exists:
+            flash("Receiver wallet address does not exist.", "error")
             return render_template("send.html", sender_wallet=sender_row["wallet_address"])
-        if amount <= 0:
-            flash("Amount must be greater than 0.", "error")
+        available_balance = get_user_available_balance(session["username"])
+        amount_ok, amount_error, amount = validate_amount(amount_raw, available_balance)
+        if not amount_ok:
+            flash(amount_error, "error")
             return render_template("send.html", sender_wallet=sender_row["wallet_address"])
         if sender_row["wallet_address"] == recipient_wallet_address:
             flash("You cannot send to your own wallet.", "error")
@@ -1063,7 +1148,15 @@ def demo_transaction():
             password_hash = bcrypt.hashpw(demo_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             db.execute(
                 "INSERT INTO users (username, password_hash, role, balance, created_at, wallet_address, locked_until) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (demo_user, password_hash, "student", DEFAULT_STARTING_BALANCE, datetime.utcnow().isoformat(), wallet_address(), None),
+                (
+                    demo_user,
+                    password_hash,
+                    "student",
+                    DEFAULT_STARTING_BALANCE,
+                    datetime.utcnow().isoformat(),
+                    generate_unique_wallet_address(),
+                    None,
+                ),
             )
     db.execute("UPDATE users SET balance = CASE WHEN balance < 10 THEN 100 ELSE balance END WHERE username = 'alice'")
     db.commit()
@@ -1130,7 +1223,7 @@ def reports():
 @role_required("admin")
 def admin_reports():
     db = get_db()
-    rows = db.execute("SELECT sender_enc, receiver_enc, amount_enc, hash, timestamp FROM transactions ORDER BY id DESC").fetchall()
+    rows = db.execute("SELECT id, sender_enc, receiver_enc, amount_enc, hash, timestamp, status FROM transactions ORDER BY id DESC").fetchall()
     txs = [tx for tx in (decrypt_row(r) for r in rows) if tx is not None]
     log_action(session["username"], "Downloaded admin PDF transaction report.")
     pdf_data = build_pdf(txs, session["username"])
@@ -1145,14 +1238,22 @@ def admin_reports():
 @role_required("admin")
 def admin_dashboard():
     db = get_db()
-    users = db.execute("SELECT username, role, balance, wallet_address, created_at FROM users ORDER BY created_at ASC").fetchall()
-    rows = db.execute("SELECT sender_enc, receiver_enc, amount_enc, hash, timestamp FROM transactions ORDER BY id DESC").fetchall()
+    users = db.execute(
+        "SELECT username, role, status, balance, wallet_address, created_at FROM users ORDER BY created_at ASC"
+    ).fetchall()
+    rows = db.execute("SELECT id, sender_enc, receiver_enc, amount_enc, hash, timestamp, status FROM transactions ORDER BY id DESC").fetchall()
     transactions_data = [tx for tx in (decrypt_row(r) for r in rows) if tx is not None]
     alerts = db.execute(
         "SELECT user, amount, reason, COALESCE(severity, 'MEDIUM') AS severity, timestamp FROM alerts ORDER BY id DESC LIMIT 100"
     ).fetchall()
     logs = db.execute("SELECT user, action, timestamp FROM logs ORDER BY id DESC LIMIT 200").fetchall()
     timeline = db.execute("SELECT user, action, timestamp FROM logs ORDER BY id DESC LIMIT 50").fetchall()
+    total_users = len(users)
+    total_transactions = len(transactions_data)
+    total_volume = round(sum(float(tx["amount"]) for tx in transactions_data), 2)
+    total_balance = round(sum(float(user["balance"]) for user in users), 2)
+    student_count = sum(1 for user in users if user["role"] == "student")
+    admin_count = sum(1 for user in users if user["role"] == "admin")
     failed_count = db.execute("SELECT COUNT(*) AS count FROM failed_logins").fetchone()["count"]
     suspicious_count = db.execute("SELECT COUNT(*) AS count FROM alerts").fetchone()["count"]
     chain_valid = blockchain.verify_chain()
@@ -1167,6 +1268,12 @@ def admin_dashboard():
         timeline=timeline,
         chain_valid=chain_valid,
         chain_length=len(blockchain.chain),
+        total_users=total_users,
+        total_transactions=total_transactions,
+        total_volume=total_volume,
+        total_balance=total_balance,
+        student_count=student_count,
+        admin_count=admin_count,
     )
 
 
@@ -1189,6 +1296,8 @@ def admin_security():
     chain_valid = blockchain.verify_chain()
     blockchain_length = len(blockchain.chain)
     system_health = "Secure" if chain_valid else "Warning"
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    backup_files = sorted([name for name in os.listdir(BACKUP_DIR) if name.endswith(".enc")], reverse=True)[:30]
     return render_template(
         "admin_security.html",
         total_users=total_users,
@@ -1201,7 +1310,70 @@ def admin_security():
         recent_failed=recent_failed,
         recent_alerts=recent_alerts,
         recent_timeline=recent_timeline,
+        backup_files=backup_files,
     )
+
+
+@app.route("/admin/users/<username>/suspend", methods=["POST"])
+@login_required
+@role_required("admin")
+def suspend_user(username):
+    if username == session.get("username"):
+        flash("You cannot suspend your own admin account.", "error")
+        return redirect(url_for("admin_dashboard"))
+    db = get_db()
+    db.execute("UPDATE users SET status = 'Suspended' WHERE username = ?", (username,))
+    db.commit()
+    log_action(session["username"], f"Suspended user: {username}")
+    flash(f"User {username} suspended.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/users/<username>/activate", methods=["POST"])
+@login_required
+@role_required("admin")
+def activate_user(username):
+    db = get_db()
+    db.execute("UPDATE users SET status = 'Active' WHERE username = ?", (username,))
+    db.commit()
+    log_action(session["username"], f"Activated user: {username}")
+    flash(f"User {username} activated.", "success")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/backup", methods=["POST"])
+@login_required
+@role_required("admin")
+def backup_database():
+    try:
+        backup_meta = create_encrypted_backup(DATABASE_PATH, BACKUP_DIR, fernet)
+        log_action(session["username"], f"Created backup: {os.path.basename(backup_meta['backup_file'])}")
+        flash(f"Backup created: {os.path.basename(backup_meta['backup_file'])}", "success")
+    except Exception as error:
+        log_error("/backup", str(error))
+        flash("Backup creation failed.", "error")
+    return redirect(url_for("admin_security"))
+
+
+@app.route("/recover", methods=["POST"])
+@login_required
+@role_required("admin")
+def recover_database():
+    backup_file = request.form.get("backup_file", "").strip()
+    if not backup_file:
+        flash("Backup filename is required.", "error")
+        return redirect(url_for("admin_security"))
+    backup_path = os.path.join(BACKUP_DIR, backup_file)
+    digest_path = f"{backup_path[:-4]}.sha256" if backup_path.endswith(".enc") else f"{backup_path}.sha256"
+    try:
+        close_db(None)
+        recover_encrypted_backup(backup_path, digest_path, DATABASE_PATH, fernet)
+        log_action(session["username"], f"Recovered backup: {backup_file}")
+        flash(f"Recovery completed from {backup_file}.", "success")
+    except Exception as error:
+        log_error("/recover", str(error))
+        flash("Recovery failed. Verify backup filename and integrity.", "error")
+    return redirect(url_for("admin_security"))
 
 
 @app.route("/system-architecture")

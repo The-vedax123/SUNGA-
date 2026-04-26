@@ -24,10 +24,10 @@
             {% endwith %}
             <form method="POST">
                 <label>Full Name</label><input name="full_name" type="text" required maxlength="80">
-                <label>Username</label><input name="username" type="text" required maxlength="30" pattern="[A-Za-z0-9_]+">
+                <label>Username</label><input name="username" type="text" required minlength="3" maxlength="20" pattern="[A-Za-z0-9]+">
                 <label>Email</label><input name="email" type="email" required maxlength="120">
                 <label>Phone Number</label><input id="phone" name="phone" type="text" required maxlength="20" pattern="[0-9+\-\s]{7,20}">
-                <label>Password</label><input id="password" name="password" type="password" required minlength="8">
+                <label>Password</label><input id="password" name="password" type="password" required minlength="8" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}">
                 <p id="passwordStrength" class="status-attention">Strength: Weak</p>
                 <label>Confirm Password</label><input id="confirm_password" name="confirm_password" type="password" required minlength="8">
                 <p id="confirmPasswordMsg" class="status-attention">Confirm password to continue.</p>

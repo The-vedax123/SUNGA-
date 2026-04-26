@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SUNGA Admin Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="auth-layout">
+    <div class="auth-container">
+        <section class="card">
+            <h1 class="brand">SUNGA</h1>
+            <h3>Admin Login</h3>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endwith %}
+            <form method="POST">
+                <label>Admin Username</label><input name="username" type="text" required maxlength="20">
+                <label>Password</label><input name="password" type="password" required minlength="8">
+                <button type="submit">Continue as Admin</button>
+            </form>
+            <p class="small-muted">Admin access requires OTP verification after password check.</p>
+            <p><a href="{{ url_for('login') }}">Back to user login</a></p>
+        </section>
+    </div>
+</body>
+</html>

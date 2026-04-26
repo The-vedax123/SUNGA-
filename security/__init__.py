@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 
 def utc_now_iso() -> str:

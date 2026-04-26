@@ -21,8 +21,19 @@ except ImportError:
 
 from blockchain import Blockchain
 from backup import create_encrypted_backup, recover_encrypted_backup
-from security import generate_otp as generate_secure_otp
 from security import generate_wallet_address, utc_now_iso
+from security.email_service import EmailDeliveryError, send_security_otp_email
+from security.otp_service import (
+    OTP_EXPIRY_SECONDS,
+    OTP_MAX_ATTEMPTS,
+    OTP_RATE_LIMIT_COUNT,
+    OTP_RATE_LIMIT_WINDOW_SECONDS,
+    build_otp_session_payload,
+    generate_otp as generate_secure_otp,
+    is_expired,
+    now_epoch,
+    parse_request_log,
+)
 from validation import (
     validate_amount,
     validate_email,
@@ -43,7 +54,7 @@ if USE_POSTGRES and psycopg2 is None:
 FERNET_KEY_PATH = os.path.join(DATA_DIR, "fernet.key")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 SESSION_TIMEOUT_MINUTES = 5
-OTP_EXPIRY_MINUTES = 2
+OTP_EXPIRY_MINUTES = OTP_EXPIRY_SECONDS // 60
 DEFAULT_STARTING_BALANCE = 100.0
 FRAUD_THRESHOLD = 200.0
 LOCKOUT_THRESHOLD = 3
@@ -245,6 +256,19 @@ def migrate_db():
         )
         """
     )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS otp_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT NOT NULL,
+            otp_code TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            verified_at TEXT
+        )
+        """
+    )
     db.commit()
 
 
@@ -351,6 +375,19 @@ def init_db():
             )
             """
         )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS otp_logs (
+                id SERIAL PRIMARY KEY,
+                user_email TEXT NOT NULL,
+                otp_code TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                verified_at TEXT
+            )
+            """
+        )
         db.commit()
         seed_admin()
         backfill_wallet_addresses()
@@ -394,6 +431,19 @@ def init_db():
             user TEXT NOT NULL,
             action TEXT NOT NULL,
             timestamp TEXT NOT NULL
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS otp_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email TEXT NOT NULL,
+            otp_code TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            verified_at TEXT
         )
         """
     )
@@ -796,6 +846,74 @@ def generate_otp() -> str:
     return generate_secure_otp()
 
 
+def clear_otp_session():
+    for key in (
+        "otp_code",
+        "otp_expiry",
+        "otp_username",
+        "otp_role",
+        "otp_email",
+        "otp_notice",
+        "otp_next",
+        "otp_attempts",
+        "otp_status",
+        "otp_purpose",
+    ):
+        session.pop(key, None)
+
+
+def log_otp_event(user_email: str, otp_code: str, status: str, attempts: int = 0, verified: bool = False):
+    db = get_db()
+    verified_at = utc_now_iso() if verified else None
+    db.execute(
+        """
+        INSERT INTO otp_logs (user_email, otp_code, status, attempts, created_at, verified_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_email or "unknown", otp_code or "000000", status, attempts, utc_now_iso(), verified_at),
+    )
+    db.commit()
+    ip_address = request.remote_addr or "unknown"
+    log_action(session.get("otp_username") or user_email or "unknown", f"OTP {status} from IP {ip_address}")
+
+
+def otp_rate_limited() -> bool:
+    history = parse_request_log(session.get("otp_request_log"))
+    if len(history) >= OTP_RATE_LIMIT_COUNT:
+        return True
+    history.append(now_epoch())
+    session["otp_request_log"] = ",".join(str(x) for x in history)
+    return False
+
+
+def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
+    if not user_row.get("email"):
+        flash("No email is registered on this account for OTP.", "error")
+        return False
+    if otp_rate_limited():
+        flash("Too many OTP requests. Try again later.", "error")
+        return False
+    payload = build_otp_session_payload(
+        username=user_row["username"],
+        role=user_row["role"],
+        email=user_row["email"],
+        next_url=next_url,
+        purpose=purpose,
+    )
+    for key, value in payload.items():
+        session[key] = value
+    try:
+        send_security_otp_email(user_row["email"], payload["otp_code"])
+    except EmailDeliveryError as error:
+        clear_otp_session()
+        log_error("/send-otp", f"email-send-failed: {error}")
+        flash("Unable to send OTP email. Check SMTP configuration.", "error")
+        return False
+    log_otp_event(user_row["email"], payload["otp_code"], "sent", attempts=0)
+    flash("OTP sent to your registered email.", "success")
+    return True
+
+
 def finalize_login(username: str, role: str):
     session.clear()
     session["username"] = username
@@ -899,7 +1017,7 @@ def login():
         password = request.form.get("password", "")
         db = get_db()
         user = db.execute(
-            "SELECT username, password_hash, role, locked_until, status FROM users WHERE username = ?",
+            "SELECT username, password_hash, role, locked_until, status, email FROM users WHERE username = ?",
             (username,),
         ).fetchone()
         if not user:
@@ -919,17 +1037,10 @@ def login():
             log_action(username, "Login failure: wrong password.")
             flash("Invalid username or password.", "error")
             return render_template("login.html")
-
-        otp = generate_otp()
         db.execute("UPDATE users SET locked_until = NULL WHERE username = ?", (username,))
         db.commit()
-        session["otp_code"] = otp
-        session["otp_expiry"] = (datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)).isoformat()
-        session["otp_username"] = user["username"]
-        session["otp_role"] = user["role"]
-        session["otp_notice"] = f"Mock email OTP sent: {otp}"
-        session["otp_next"] = url_for("dashboard")
-        log_action(username, "OTP generated for login.")
+        if not issue_otp_challenge(user_row=user, next_url=url_for("dashboard"), purpose="login"):
+            return render_template("login.html")
         return redirect(url_for("verify_otp"))
     return render_template("login.html")
 
@@ -941,7 +1052,7 @@ def admin_login():
         password = request.form.get("password", "")
         db = get_db()
         user = db.execute(
-            "SELECT username, password_hash, role, locked_until, status FROM users WHERE username = ?",
+            "SELECT username, password_hash, role, locked_until, status, email FROM users WHERE username = ?",
             (username,),
         ).fetchone()
         if not user or user["role"] != "admin":
@@ -961,19 +1072,52 @@ def admin_login():
             log_action(username, "Admin login failure: wrong password.")
             flash("Invalid admin credentials.", "error")
             return render_template("admin_login.html")
-
-        otp = generate_otp()
         db.execute("UPDATE users SET locked_until = NULL WHERE username = ?", (username,))
         db.commit()
-        session["otp_code"] = otp
-        session["otp_expiry"] = (datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)).isoformat()
-        session["otp_username"] = user["username"]
-        session["otp_role"] = user["role"]
-        session["otp_notice"] = f"Mock email OTP sent: {otp}"
-        session["otp_next"] = url_for("admin_dashboard")
-        log_action(username, "OTP generated for admin login.")
+        if not issue_otp_challenge(user_row=user, next_url=url_for("admin_dashboard"), purpose="admin_login"):
+            return render_template("admin_login.html")
         return redirect(url_for("verify_otp"))
     return render_template("admin_login.html")
+
+
+@app.route("/send-otp", methods=["POST"])
+def send_otp():
+    username = request.form.get("username", "").strip()
+    if not username:
+        flash("Username is required.", "error")
+        return redirect(url_for("login"))
+    db = get_db()
+    user = db.execute("SELECT username, role, email, status FROM users WHERE username = ?", (username,)).fetchone()
+    if not user or user["status"] != "Active":
+        flash("Unable to send OTP for this account.", "error")
+        return redirect(url_for("login"))
+    next_url = url_for("admin_dashboard") if user["role"] == "admin" else url_for("dashboard")
+    if issue_otp_challenge(user_row=user, next_url=next_url, purpose="manual_send"):
+        return redirect(url_for("verify_otp"))
+    return redirect(url_for("login"))
+
+
+@app.route("/resend-otp", methods=["POST"])
+def resend_otp():
+    if "otp_username" not in session:
+        flash("OTP session not found. Please login again.", "error")
+        return redirect(url_for("login"))
+    db = get_db()
+    user = db.execute(
+        "SELECT username, role, email, status FROM users WHERE username = ?",
+        (session["otp_username"],),
+    ).fetchone()
+    if not user or user["status"] != "Active":
+        clear_otp_session()
+        flash("Unable to resend OTP for this account.", "error")
+        return redirect(url_for("login"))
+    if issue_otp_challenge(
+        user_row=user,
+        next_url=session.get("otp_next", url_for("dashboard")),
+        purpose=session.get("otp_purpose", "login"),
+    ):
+        log_otp_event(user["email"], session.get("otp_code"), "resent", attempts=0)
+    return redirect(url_for("verify_otp"))
 
 
 @app.route("/verify-otp", methods=["GET", "POST"])
@@ -984,30 +1128,41 @@ def verify_otp():
     if request.method == "POST":
         otp_input = request.form.get("otp", "").strip()
         if not otp_input.isdigit() or len(otp_input) != 6:
-            track_failed_login(session.get("otp_username", "unknown"))
-            log_action(session.get("otp_username", "unknown"), "OTP verification failed: invalid format.")
+            session["otp_attempts"] = int(session.get("otp_attempts", 0)) + 1
+            log_otp_event(session.get("otp_email"), otp_input, "failed", attempts=session["otp_attempts"])
             flash("OTP must be a 6-digit code.", "error")
             return render_template("verify_otp.html", otp_notice=session.get("otp_notice"))
-        if datetime.utcnow() > datetime.fromisoformat(session["otp_expiry"]):
-            track_failed_login(session.get("otp_username", "unknown"))
-            log_action(session.get("otp_username", "unknown"), "OTP verification failed: code expired.")
-            session.pop("otp_code", None)
-            session.pop("otp_expiry", None)
-            session.pop("otp_notice", None)
+        if is_expired(session["otp_expiry"]):
+            log_otp_event(session.get("otp_email"), session.get("otp_code"), "expired", attempts=session.get("otp_attempts", 0))
+            clear_otp_session()
             flash("OTP expired. Please login again.", "error")
             return redirect(url_for("login"))
+        if int(session.get("otp_attempts", 0)) >= OTP_MAX_ATTEMPTS:
+            log_otp_event(session.get("otp_email"), session.get("otp_code"), "failed", attempts=session.get("otp_attempts", 0))
+            clear_otp_session()
+            flash("Too many OTP attempts. Please login again.", "error")
+            return redirect(url_for("login"))
         if otp_input != session["otp_code"]:
-            track_failed_login(session.get("otp_username", "unknown"))
-            log_action(session.get("otp_username", "unknown"), "OTP verification failed: wrong code.")
+            session["otp_attempts"] = int(session.get("otp_attempts", 0)) + 1
+            log_otp_event(session.get("otp_email"), otp_input, "failed", attempts=session["otp_attempts"])
             flash("Incorrect OTP. Please try again.", "error")
             return render_template("verify_otp.html", otp_notice=session.get("otp_notice"))
 
         username = session["otp_username"]
         role = session["otp_role"]
-        finalize_login(username, role)
-        log_action(username, "Successful login with OTP.")
-        flash("Login successful.", "success")
-        return redirect(session.pop("otp_next", url_for("dashboard")))
+        email = session.get("otp_email")
+        next_url = session.get("otp_next", url_for("dashboard"))
+        log_otp_event(email, otp_input, "verified", attempts=0, verified=True)
+        purpose = session.get("otp_purpose", "login")
+        if purpose in ("login", "admin_login", "manual_send"):
+            finalize_login(username, role)
+            log_action(username, "Successful login with OTP.")
+            flash("Login successful.", "success")
+        else:
+            session["otp_transfer_verified_at"] = utc_now_iso()
+            clear_otp_session()
+            flash("OTP verified successfully.", "success")
+        return redirect(next_url)
     return render_template("verify_otp.html", otp_notice=session.get("otp_notice"))
 
 
@@ -1117,14 +1272,33 @@ def confirm_transfer():
         action = request.form.get("action")
         if action == "cancel":
             session.pop("pending_transfer", None)
+            session.pop("otp_transfer_verified_at", None)
             log_action(session["username"], "Transfer confirmation cancelled.")
             return redirect(url_for("send_tokens"))
+        if float(pending["amount"]) >= FRAUD_THRESHOLD and not session.get("otp_transfer_verified_at"):
+            db = get_db()
+            user_row = db.execute(
+                "SELECT username, role, email, status FROM users WHERE username = ?",
+                (session["username"],),
+            ).fetchone()
+            if not user_row:
+                flash("User account not found.", "error")
+                return redirect(url_for("send_tokens"))
+            if not issue_otp_challenge(
+                user_row=user_row,
+                next_url=url_for("confirm_transfer"),
+                purpose="transfer_approval",
+            ):
+                return redirect(url_for("confirm_transfer"))
+            flash("OTP required to approve high-value transaction.", "error")
+            return redirect(url_for("verify_otp"))
         success, message = perform_transaction(
             pending["sender"],
             pending["recipient_wallet_address"],
             float(pending["amount"]),
         )
         session.pop("pending_transfer", None)
+        session.pop("otp_transfer_verified_at", None)
         log_action(session["username"], "Transfer confirmation submitted.")
         flash(message, "success" if success else "error")
         return redirect(url_for("transactions") if success else url_for("send_tokens"))

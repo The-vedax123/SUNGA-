@@ -17,7 +17,7 @@
         <section class="card">
             <h1 class="brand">SUNGA</h1>
             <h3>Two-Factor Verification</h3>
-            <p class="small-muted">{{ otp_notice }}</p>
+            <p class="small-muted">Enter the code sent to your registered email. Code expires in 5 minutes.</p>
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
@@ -29,6 +29,9 @@
                 <label for="otp">Enter 6-digit OTP</label>
                 <input id="otp" name="otp" type="text" maxlength="6" minlength="6" pattern="[0-9]{6}" required>
                 <button type="submit">Verify OTP</button>
+            </form>
+            <form method="POST" action="{{ url_for('resend_otp') }}">
+                <button class="btn-secondary" type="submit">Resend OTP</button>
             </form>
         </section>
     </div>

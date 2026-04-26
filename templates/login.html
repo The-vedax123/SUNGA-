@@ -23,6 +23,7 @@
                 {% endfor %}
             {% endwith %}
             <form method="POST" id="loginForm">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label>Username</label><input name="username" type="text" required maxlength="30">
                 <label>Password</label><input name="password" type="password" required minlength="8">
                 <button type="submit">Continue</button>

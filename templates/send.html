@@ -47,6 +47,7 @@
                 {% endfor %}
             {% endwith %}
             <form method="POST" class="card">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label for="recipient_wallet_address">Recipient Wallet Address</label>
                 <input id="recipient_wallet_address" name="recipient_wallet_address" type="text" required minlength="10" maxlength="20" placeholder="0xA7F93B2C4F12">
                 <label for="amount">Amount</label>

@@ -1,15 +1,18 @@
 import io
+import logging
 import os
 import re
 import sqlite3
 import traceback
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 
 import bcrypt
 from cryptography.fernet import Fernet
 from cryptography.fernet import InvalidToken
+from dotenv import load_dotenv
 from flask import Flask, flash, g, jsonify, make_response, redirect, render_template, request, session, url_for
+from flask_wtf.csrf import CSRFProtect
 import qrcode
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -20,9 +23,9 @@ except ImportError:
     psycopg2 = None
 
 from blockchain import Blockchain
-from backup import create_encrypted_backup, recover_encrypted_backup
+from backup import create_daily_backup, create_encrypted_backup, recover_encrypted_backup, start_backup_scheduler
 from security import generate_wallet_address, utc_now_iso
-from security.email_service import EmailDeliveryError, send_security_otp_email
+from security.email_service import send_security_otp_email_async
 from security.otp_service import (
     OTP_EXPIRY_SECONDS,
     OTP_MAX_ATTEMPTS,
@@ -44,9 +47,12 @@ from validation import (
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 IS_VERCEL = os.environ.get("VERCEL") == "1"
 DATA_DIR = os.environ.get("DATA_DIR", "/tmp" if IS_VERCEL else BASE_DIR)
-DATABASE_PATH = os.path.join(DATA_DIR, "database.db")
+DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(DATA_DIR, "database.db"))
+if not os.path.isabs(DATABASE_PATH):
+    DATABASE_PATH = os.path.join(BASE_DIR, DATABASE_PATH)
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
 if USE_POSTGRES and psycopg2 is None:
@@ -60,11 +66,29 @@ FRAUD_THRESHOLD = 200.0
 LOCKOUT_THRESHOLD = 3
 LOCKOUT_MINUTES = 5
 FEE_RATE = 0.01
+LOGIN_LOCK_THRESHOLD = 5
+LOGIN_LOCK_MINUTES = 15
+
+LOG_DIR = os.path.join(BASE_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, "system.log"),
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("sunga")
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-change-this-secret-key")
+app_secret = os.environ.get("SECRET_KEY")
+if not app_secret:
+    raise RuntimeError("SECRET_KEY environment variable is required.")
+app.config["SECRET_KEY"] = app_secret
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=SESSION_TIMEOUT_MINUTES)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+csrf = CSRFProtect(app)
 
 def get_or_create_fernet_key() -> str:
     env_key = os.environ.get("FERNET_KEY")
@@ -84,6 +108,7 @@ fernet_key = get_or_create_fernet_key()
 fernet = Fernet(fernet_key.encode("utf-8"))
 blockchain = Blockchain()
 BOOTSTRAPPED = False
+BACKUP_SCHEDULER_STARTED = False
 
 
 def _qmark_to_pyformat(query: str) -> str:
@@ -182,6 +207,10 @@ def migrate_db():
         db.execute("ALTER TABLE users ADD COLUMN phone TEXT")
     if "status" not in user_cols:
         db.execute("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'Active'")
+    if "login_attempts" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN login_attempts INTEGER DEFAULT 0")
+    if "lock_until" not in user_cols:
+        db.execute("ALTER TABLE users ADD COLUMN lock_until TEXT")
     tx_cols = get_columns("transactions")
     if "amount" in tx_cols:
         try:
@@ -289,6 +318,8 @@ def init_db():
                 email TEXT,
                 phone TEXT,
                 status TEXT DEFAULT 'Active',
+                login_attempts INTEGER DEFAULT 0,
+                lock_until TEXT,
                 locked_until TEXT
             )
             """
@@ -406,6 +437,8 @@ def init_db():
             email TEXT,
             phone TEXT,
             status TEXT DEFAULT 'Active',
+            login_attempts INTEGER DEFAULT 0,
+            lock_until TEXT,
             locked_until TEXT
         )
         """
@@ -494,6 +527,7 @@ def log_action(user: str, action: str):
     timestamp = utc_now_iso()
     db.execute("INSERT INTO logs (user, action, timestamp) VALUES (?, ?, ?)", (user, action, timestamp))
     db.commit()
+    logger.info("user=%s action=%s", user, action)
 
 
 def log_error(route_name: str, error_message: str):
@@ -509,6 +543,7 @@ def log_error(route_name: str, error_message: str):
         (user, normalized_route, normalized_message, timestamp),
     )
     db.commit()
+    logger.error("route=%s user=%s error=%s", normalized_route, user, normalized_message)
     g.error_logged = True
     log_action(user, f"Exception at {normalized_route}: {normalized_message[:120]}")
 
@@ -635,36 +670,38 @@ def migrate_transaction_encryption():
 def track_failed_login(username: str):
     db = get_db()
     ip_address = request.remote_addr or "unknown"
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = utc_now_iso()
     db.execute(
         "INSERT INTO failed_logins (username, timestamp, ip_address) VALUES (?, ?, ?)",
         (username, timestamp, ip_address),
     )
-    db.commit()
-
     if username:
-        window_start = (datetime.utcnow() - timedelta(minutes=LOCKOUT_MINUTES)).isoformat()
-        recent_failures = db.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM failed_logins
-            WHERE username = ? AND timestamp >= ?
-            """,
-            (username, window_start),
-        ).fetchone()["count"]
-        if recent_failures >= LOCKOUT_THRESHOLD:
-            locked_until = (datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)).isoformat()
-            db.execute("UPDATE users SET locked_until = ? WHERE username = ?", (locked_until, username))
-            db.commit()
-            log_action(username, "Account lockout triggered")
+        row = db.execute(
+            "SELECT login_attempts FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if row:
+            attempts = int(row["login_attempts"] or 0) + 1
+            lock_until = None
+            if attempts >= LOGIN_LOCK_THRESHOLD:
+                lock_until = (datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=LOGIN_LOCK_MINUTES)).isoformat()
+            db.execute(
+                "UPDATE users SET login_attempts = ?, lock_until = ?, locked_until = ? WHERE username = ?",
+                (attempts, lock_until, lock_until, username),
+            )
+            if lock_until:
+                log_action(username, "Account lockout triggered")
+    db.commit()
 
 
 def is_account_locked(user_row) -> bool:
-    locked_until = user_row["locked_until"] if "locked_until" in user_row.keys() else None
+    locked_until = user_row["lock_until"] if "lock_until" in user_row.keys() else None
+    if not locked_until and "locked_until" in user_row.keys():
+        locked_until = user_row["locked_until"]
     if not locked_until:
         return False
     try:
-        return datetime.utcnow() < datetime.fromisoformat(locked_until)
+        return datetime.now(UTC).replace(tzinfo=None) < datetime.fromisoformat(locked_until)
     except ValueError:
         return False
 
@@ -747,14 +784,33 @@ def perform_transaction(sender: str, receiver_wallet: str, amount: float, *, is_
         return False, "Blockchain integrity check failed. Transaction cancelled."
     sender_enc, receiver_enc, amount_enc = encrypt_transaction_fields(sender, receiver_user["username"], amount)
     try:
-        db.execute("UPDATE users SET balance = balance - ? WHERE username = ?", (total, sender))
-        db.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (amount, receiver_user["username"]))
-        db.execute(
-            "INSERT INTO transactions (sender, receiver, sender_enc, receiver_enc, amount_enc, fee_amount, hash, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (sender, receiver_user["username"], sender_enc, receiver_enc, amount_enc, fee, tx_block.block_hash, timestamp, "completed"),
-        )
-        db.commit()
-    except sqlite3.Error:
+        if USE_POSTGRES:
+            db.execute("UPDATE users SET balance = balance - ? WHERE username = ?", (total, sender))
+            db.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (amount, receiver_user["username"]))
+            db.execute(
+                "INSERT INTO transactions (sender, receiver, sender_enc, receiver_enc, amount_enc, fee_amount, hash, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (sender, receiver_user["username"], sender_enc, receiver_enc, amount_enc, fee, tx_block.block_hash, timestamp, "completed"),
+            )
+            db.commit()
+        else:
+            with db:
+                db.execute("UPDATE users SET balance = balance - ? WHERE username = ?", (total, sender))
+                db.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (amount, receiver_user["username"]))
+                db.execute(
+                    "INSERT INTO transactions (sender, receiver, sender_enc, receiver_enc, amount_enc, fee_amount, hash, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        sender,
+                        receiver_user["username"],
+                        sender_enc,
+                        receiver_enc,
+                        amount_enc,
+                        fee,
+                        tx_block.block_hash,
+                        timestamp,
+                        "completed",
+                    ),
+                )
+    except Exception:
         log_action(sender, "Transaction failed due to database error.")
         return False, "Could not complete transaction safely."
     level = risk_level(amount)
@@ -902,13 +958,13 @@ def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
     )
     for key, value in payload.items():
         session[key] = value
-    try:
-        send_security_otp_email(user_row["email"], payload["otp_code"])
-    except EmailDeliveryError as error:
+    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("EMAIL_USER")
+    smtp_password = os.environ.get("SMTP_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
+    if not smtp_user or not smtp_password:
         clear_otp_session()
-        log_error("/send-otp", f"email-send-failed: {error}")
         flash("Unable to send OTP email. Check SMTP configuration.", "error")
         return False
+    send_security_otp_email_async(user_row["email"], payload["otp_code"])
     log_otp_event(user_row["email"], payload["otp_code"], "sent", attempts=0)
     flash("OTP sent to your registered email.", "success")
     return True
@@ -1017,7 +1073,7 @@ def login():
         password = request.form.get("password", "")
         db = get_db()
         user = db.execute(
-            "SELECT username, password_hash, role, locked_until, status, email FROM users WHERE username = ?",
+            "SELECT username, password_hash, role, locked_until, lock_until, status, email, login_attempts FROM users WHERE username = ?",
             (username,),
         ).fetchone()
         if not user:
@@ -1037,7 +1093,10 @@ def login():
             log_action(username, "Login failure: wrong password.")
             flash("Invalid username or password.", "error")
             return render_template("login.html")
-        db.execute("UPDATE users SET locked_until = NULL WHERE username = ?", (username,))
+        db.execute(
+            "UPDATE users SET login_attempts = 0, lock_until = NULL, locked_until = NULL WHERE username = ?",
+            (username,),
+        )
         db.commit()
         if not issue_otp_challenge(user_row=user, next_url=url_for("dashboard"), purpose="login"):
             return render_template("login.html")
@@ -1052,7 +1111,7 @@ def admin_login():
         password = request.form.get("password", "")
         db = get_db()
         user = db.execute(
-            "SELECT username, password_hash, role, locked_until, status, email FROM users WHERE username = ?",
+            "SELECT username, password_hash, role, locked_until, lock_until, status, email, login_attempts FROM users WHERE username = ?",
             (username,),
         ).fetchone()
         if not user or user["role"] != "admin":
@@ -1072,7 +1131,10 @@ def admin_login():
             log_action(username, "Admin login failure: wrong password.")
             flash("Invalid admin credentials.", "error")
             return render_template("admin_login.html")
-        db.execute("UPDATE users SET locked_until = NULL WHERE username = ?", (username,))
+        db.execute(
+            "UPDATE users SET login_attempts = 0, lock_until = NULL, locked_until = NULL WHERE username = ?",
+            (username,),
+        )
         db.commit()
         if not issue_otp_challenge(user_row=user, next_url=url_for("admin_dashboard"), purpose="admin_login"):
             return render_template("admin_login.html")
@@ -1145,6 +1207,10 @@ def verify_otp():
         if otp_input != session["otp_code"]:
             session["otp_attempts"] = int(session.get("otp_attempts", 0)) + 1
             log_otp_event(session.get("otp_email"), otp_input, "failed", attempts=session["otp_attempts"])
+            if int(session.get("otp_attempts", 0)) >= OTP_MAX_ATTEMPTS:
+                clear_otp_session()
+                flash("Too many OTP attempts. Please login again.", "error")
+                return redirect(url_for("login"))
             flash("Incorrect OTP. Please try again.", "error")
             return render_template("verify_otp.html", otp_notice=session.get("otp_notice"))
 
@@ -1645,6 +1711,7 @@ def hold_funds():
 
 @app.route("/api/lock-funds", methods=["POST"])
 @login_required
+@csrf.exempt
 def api_lock_funds():
     db = get_db()
     user = db.execute("SELECT id FROM users WHERE username = ?", (session["username"],)).fetchone()
@@ -1742,15 +1809,21 @@ def handle_exception(error):
 
 
 def bootstrap():
-    global BOOTSTRAPPED
+    global BOOTSTRAPPED, BACKUP_SCHEDULER_STARTED
     if BOOTSTRAPPED:
         return
     with app.app_context():
         init_db()
         releaseExpiredFunds()
         load_blockchain_from_db()
-        if not blockchain.verify_chain():
-            log_action("system", "WARNING: Blockchain integrity check failed during startup.")
+        if not blockchain.is_chain_valid():
+            logger.critical("Blockchain integrity compromised on startup. Shutting down.")
+            raise SystemExit(1)
+        if not BACKUP_SCHEDULER_STARTED:
+            os.makedirs(BACKUP_DIR, exist_ok=True)
+            create_daily_backup(DATABASE_PATH, BACKUP_DIR)
+            start_backup_scheduler(DATABASE_PATH, BACKUP_DIR)
+            BACKUP_SCHEDULER_STARTED = True
     BOOTSTRAPPED = True
 
 

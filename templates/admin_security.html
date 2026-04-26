@@ -111,9 +111,11 @@
                     <section class="card">
                         <h2>Backup and Recovery</h2>
                         <form method="POST" action="{{ url_for('backup_database') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit">Create Encrypted Backup</button>
                         </form>
                         <form method="POST" action="{{ url_for('recover_database') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <label for="backup_file">Recover from backup file</label>
                             <select id="backup_file" name="backup_file" required>
                                 <option value="">Select backup</option>

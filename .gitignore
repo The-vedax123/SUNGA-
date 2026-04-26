@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 database.db
 fernet.key
+.env
+logs/

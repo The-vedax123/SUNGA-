@@ -1,5 +1,8 @@
 import unittest
+import os
 from unittest.mock import patch
+
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
 from app import app, get_db, init_db
 
@@ -8,6 +11,7 @@ class OtpFlowTests(unittest.TestCase):
     def setUp(self):
         self.client = app.test_client()
         self.client.testing = True
+        app.config["WTF_CSRF_ENABLED"] = False
         with app.app_context():
             init_db()
             db = get_db()

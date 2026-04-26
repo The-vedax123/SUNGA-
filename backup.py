@@ -1,7 +1,11 @@
 import os
+import shutil
+import threading
+import time
 from datetime import datetime
 
 from cryptography.fernet import Fernet
+import schedule
 
 from security import sha256_hex
 
@@ -52,3 +56,26 @@ def recover_encrypted_backup(
         db_file.write(decrypted_data)
 
     return {"restored": True, "digest": actual_digest}
+
+
+def create_daily_backup(database_path: str, backup_dir: str) -> str:
+    os.makedirs(backup_dir, exist_ok=True)
+    filename = f"backup_{datetime.utcnow().strftime('%Y%m%d')}.db"
+    backup_path = os.path.join(backup_dir, filename)
+    shutil.copy2(database_path, backup_path)
+    return backup_path
+
+
+def start_backup_scheduler(database_path: str, backup_dir: str) -> threading.Thread:
+    def _worker():
+        schedule.clear("sunga-backup")
+        schedule.every().day.at("02:00").do(create_daily_backup, database_path=database_path, backup_dir=backup_dir).tag(
+            "sunga-backup"
+        )
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+
+    thread = threading.Thread(target=_worker, daemon=True, name="sunga-backup-scheduler")
+    thread.start()
+    return thread

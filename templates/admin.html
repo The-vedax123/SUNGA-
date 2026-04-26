@@ -127,10 +127,12 @@
                                     <td>
                                         {% if user['status'] == 'Active' and user['role'] != 'admin' %}
                                         <form method="POST" action="{{ url_for('suspend_user', username=user['username']) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button class="btn-secondary" type="submit">Suspend</button>
                                         </form>
                                         {% elif user['status'] != 'Active' %}
                                         <form method="POST" action="{{ url_for('activate_user', username=user['username']) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit">Activate</button>
                                         </form>
                                         {% else %}

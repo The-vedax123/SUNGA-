@@ -51,6 +51,7 @@
                     <section class="card">
                         <h3>Recent Transactions</h3>
                         <form method="POST" action="{{ url_for('demo_transaction') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit">Generate Demo Transaction</button>
                         </form>
                         <div class="table-wrap">

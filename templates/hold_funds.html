@@ -50,6 +50,7 @@
                 <p class="small-muted">Release Date: {{ next_release_date[:10] if next_release_date else 'No active lock' }}</p>
             </section>
             <form method="POST" class="card">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <h3>Hold Funds Form</h3>
                 <label for="amount">Amount</label>
                 <input id="amount" name="amount" type="number" min="0.01" step="0.01" required>

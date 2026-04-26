@@ -23,6 +23,7 @@
                 {% endfor %}
             {% endwith %}
             <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label>Full Name</label><input name="full_name" type="text" required maxlength="80">
                 <label>Username</label><input name="username" type="text" required minlength="3" maxlength="20" pattern="[A-Za-z0-9]+" title="Username must be 3-20 characters using letters and numbers only." placeholder="e.g. SungaUser01">
                 <p class="small-muted">Username must be 3-20 characters and contain letters/numbers only.</p>

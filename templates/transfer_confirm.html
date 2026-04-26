@@ -45,6 +45,7 @@
                 <p>Transaction Fee: {{ "%.2f"|format(pending.fee) }} SCT</p>
                 <p><strong>Total Amount: {{ "%.2f"|format(pending.total) }} SCT</strong></p>
                 <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" name="action" value="confirm">Confirm</button>
                     <button class="btn-inline btn-secondary" type="submit" name="action" value="cancel">Cancel</button>
                 </form>

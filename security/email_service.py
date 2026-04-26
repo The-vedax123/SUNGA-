@@ -1,5 +1,6 @@
 import os
 import smtplib
+import threading
 from email.mime.text import MIMEText
 
 
@@ -7,9 +8,9 @@ class EmailDeliveryError(Exception):
     pass
 
 
-def send_security_otp_email(recipient_email: str, otp_code: str) -> None:
-    smtp_user = os.environ.get("SMTP_USER", "").strip()
-    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
+def _send_security_otp_email_sync(recipient_email: str, otp_code: str) -> None:
+    smtp_user = os.environ.get("SMTP_USER", os.environ.get("EMAIL_USER", "")).strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", os.environ.get("EMAIL_PASSWORD", "")).strip()
     smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com").strip()
     smtp_port = int(os.environ.get("SMTP_PORT", "587").strip())
 
@@ -35,3 +36,18 @@ def send_security_otp_email(recipient_email: str, otp_code: str) -> None:
             smtp.sendmail(smtp_user, [recipient_email], msg.as_string())
     except Exception as error:
         raise EmailDeliveryError(str(error)) from error
+
+
+def send_security_otp_email(recipient_email: str, otp_code: str) -> None:
+    _send_security_otp_email_sync(recipient_email, otp_code)
+
+
+def send_security_otp_email_async(recipient_email: str, otp_code: str) -> threading.Thread:
+    worker = threading.Thread(
+        target=_send_security_otp_email_sync,
+        args=(recipient_email, otp_code),
+        daemon=True,
+        name="sunga-otp-email",
+    )
+    worker.start()
+    return worker

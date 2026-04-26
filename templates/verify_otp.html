@@ -26,11 +26,13 @@
                 {% endif %}
             {% endwith %}
             <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label for="otp">Enter 6-digit OTP</label>
                 <input id="otp" name="otp" type="text" maxlength="6" minlength="6" pattern="[0-9]{6}" required>
                 <button type="submit">Verify OTP</button>
             </form>
             <form method="POST" action="{{ url_for('resend_otp') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn-secondary" type="submit">Resend OTP</button>
             </form>
         </section>

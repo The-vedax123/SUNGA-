@@ -8,6 +8,7 @@ PASSWORD_UPPER = re.compile(r"[A-Z]")
 PASSWORD_LOWER = re.compile(r"[a-z]")
 PASSWORD_DIGIT = re.compile(r"\d")
 PASSWORD_SPECIAL = re.compile(r"[^A-Za-z0-9]")
+PASSWORD_POLICY_PATTERN = re.compile(r"^(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])(?=.*[^A-Za-z0-9]).{8,}$")
 WALLET_PATTERN = re.compile(r"^SW-[A-F0-9]{12}$")
 
 
@@ -22,16 +23,18 @@ def validate_username(username: str) -> tuple[bool, str]:
 def validate_password(password: str) -> tuple[bool, str]:
     if not password:
         return False, "Password is required."
-    if len(password) < 8:
-        return False, "Password must be at least 8 characters."
-    if not PASSWORD_UPPER.search(password):
-        return False, "Password must include at least one uppercase letter."
-    if not PASSWORD_LOWER.search(password):
-        return False, "Password must include at least one lowercase letter."
-    if not PASSWORD_DIGIT.search(password):
-        return False, "Password must include at least one number."
-    if not PASSWORD_SPECIAL.search(password):
-        return False, "Password must include at least one special character."
+    if not PASSWORD_POLICY_PATTERN.fullmatch(password):
+        if len(password) < 8:
+            return False, "Password must be at least 8 characters."
+        if not PASSWORD_UPPER.search(password):
+            return False, "Password must include at least one uppercase letter."
+        if not PASSWORD_LOWER.search(password):
+            return False, "Password must include at least one lowercase letter."
+        if not PASSWORD_DIGIT.search(password):
+            return False, "Password must include at least one number."
+        if not PASSWORD_SPECIAL.search(password):
+            return False, "Password must include at least one special character."
+        return False, "Password does not meet security policy."
     return True, ""
 
 

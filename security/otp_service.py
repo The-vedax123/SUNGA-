@@ -1,6 +1,6 @@
 import secrets
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 OTP_EXPIRY_SECONDS = 300
@@ -18,11 +18,11 @@ def now_epoch() -> int:
 
 
 def expiry_iso() -> str:
-    return (datetime.utcnow() + timedelta(seconds=OTP_EXPIRY_SECONDS)).isoformat()
+    return (datetime.now(UTC) + timedelta(seconds=OTP_EXPIRY_SECONDS)).replace(tzinfo=None).isoformat()
 
 
 def is_expired(expiry_iso_value: str) -> bool:
-    return datetime.utcnow() > datetime.fromisoformat(expiry_iso_value)
+    return datetime.now(UTC).replace(tzinfo=None) > datetime.fromisoformat(expiry_iso_value)
 
 
 def build_otp_session_payload(*, username: str, role: str, email: str, next_url: str, purpose: str) -> dict:

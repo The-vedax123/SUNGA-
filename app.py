@@ -953,7 +953,8 @@ def otp_rate_limited() -> bool:
 
 
 def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
-    if not user_row.get("email"):
+    user_email = user_row["email"] if "email" in user_row.keys() else None
+    if not user_email:
         flash("No email is registered on this account for OTP.", "error")
         return False
     if otp_rate_limited():
@@ -962,7 +963,7 @@ def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
     payload = build_otp_session_payload(
         username=user_row["username"],
         role=user_row["role"],
-        email=user_row["email"],
+        email=user_email,
         next_url=next_url,
         purpose=purpose,
     )
@@ -974,8 +975,8 @@ def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
         clear_otp_session()
         flash("Unable to send OTP email. Check SMTP configuration.", "error")
         return False
-    send_security_otp_email_async(user_row["email"], payload["otp_code"])
-    log_otp_event(user_row["email"], payload["otp_code"], "sent", attempts=0)
+    send_security_otp_email_async(user_email, payload["otp_code"])
+    log_otp_event(user_email, payload["otp_code"], "sent", attempts=0)
     flash("OTP sent to your registered email.", "success")
     return True
 

@@ -86,6 +86,20 @@ class OtpFlowTests(unittest.TestCase):
         self.assertIn(response.status_code, (301, 302))
         self.assertIn("/admin", response.headers.get("Location", ""))
 
+    def test_admin_login_handles_sqlite_row_and_falls_back_without_smtp(self):
+        with patch.dict(
+            os.environ,
+            {"SMTP_USER": "", "SMTP_PASSWORD": "", "EMAIL_USER": "", "EMAIL_PASSWORD": ""},
+            clear=False,
+        ):
+            response = self.client.post(
+                "/admin/login",
+                data={"username": "admin", "password": "admin123!"},
+                follow_redirects=False,
+            )
+        self.assertIn(response.status_code, (301, 302))
+        self.assertIn("/admin", response.headers.get("Location", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -100,6 +100,16 @@ class OtpFlowTests(unittest.TestCase):
         self.assertIn(response.status_code, (301, 302))
         self.assertIn("/admin", response.headers.get("Location", ""))
 
+    def test_login_shows_db_configuration_error_on_vercel_without_postgres(self):
+        with patch("app.IS_VERCEL", True), patch("app.USE_POSTGRES", False), patch("app.REQUESTED_POSTGRES", False):
+            response = self.client.post(
+                "/login",
+                data={"username": "admin", "password": "admin123!"},
+                follow_redirects=True,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Server database is not configured. Set DATABASE_URL to Postgres in Vercel.", response.data)
+
 
 if __name__ == "__main__":
     unittest.main()

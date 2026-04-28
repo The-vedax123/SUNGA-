@@ -145,8 +145,10 @@ def get_db():
             try:
                 conn = psycopg2.connect(DATABASE_URL)
                 g.db = PostgresCompatDB(conn)
-            except Exception:
-                # Graceful fallback for serverless startup/runtime DB misconfig.
+            except Exception as error:
+                if IS_VERCEL:
+                    raise RuntimeError("Postgres connection failed on Vercel. Check DATABASE_URL.") from error
+                # Local/dev fallback to preserve developer ergonomics.
                 g.db = sqlite3.connect(DATABASE_PATH)
                 g.db.row_factory = sqlite3.Row
         else:
@@ -997,6 +999,18 @@ def otp_strict_mode_enabled() -> bool:
     return os.environ.get("OTP_STRICT_MODE", "").strip() == "1"
 
 
+def ensure_runtime_db_ready() -> bool:
+    if not IS_VERCEL:
+        return True
+    if USE_POSTGRES:
+        return True
+    if REQUESTED_POSTGRES and psycopg2 is None:
+        flash("Server database adapter is missing. Redeploy after installing psycopg2-binary.", "error")
+        return False
+    flash("Server database is not configured. Set DATABASE_URL to Postgres in Vercel.", "error")
+    return False
+
+
 def complete_login_without_otp(username: str, role: str, reason: str, next_url: str):
     finalize_login(username, role)
     log_action(username, f"Successful login without OTP: {reason}")
@@ -1043,6 +1057,8 @@ def index():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
+        if not ensure_runtime_db_ready():
+            return render_template("register.html")
         full_name = request.form.get("full_name", "").strip()
         username = request.form.get("username", "").strip()
         email = request.form.get("email", "").strip()
@@ -1103,6 +1119,8 @@ def register():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
+        if not ensure_runtime_db_ready():
+            return render_template("login.html")
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         db = get_db()
@@ -1145,6 +1163,8 @@ def login():
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
+        if not ensure_runtime_db_ready():
+            return render_template("admin_login.html")
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         db = get_db()

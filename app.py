@@ -52,7 +52,7 @@ IS_VERCEL = os.environ.get("VERCEL") == "1"
 DATA_DIR = os.environ.get("DATA_DIR", "/tmp" if IS_VERCEL else BASE_DIR)
 DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(DATA_DIR, "database.db"))
 if not os.path.isabs(DATABASE_PATH):
-    DATABASE_PATH = os.path.join(BASE_DIR, DATABASE_PATH)
+    DATABASE_PATH = os.path.join(DATA_DIR if IS_VERCEL else BASE_DIR, DATABASE_PATH)
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 USE_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
 if USE_POSTGRES and psycopg2 is None:
@@ -69,7 +69,7 @@ FEE_RATE = 0.01
 LOGIN_LOCK_THRESHOLD = 5
 LOGIN_LOCK_MINUTES = 15
 
-LOG_DIR = os.path.join(BASE_DIR, "logs")
+LOG_DIR = os.path.join(DATA_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 logging.basicConfig(
     filename=os.path.join(LOG_DIR, "system.log"),
@@ -1819,7 +1819,8 @@ def bootstrap():
         if not blockchain.is_chain_valid():
             logger.critical("Blockchain integrity compromised on startup. Shutting down.")
             raise SystemExit(1)
-        if not BACKUP_SCHEDULER_STARTED:
+        # Serverless runtimes should not start long-lived schedulers.
+        if not BACKUP_SCHEDULER_STARTED and not IS_VERCEL:
             os.makedirs(BACKUP_DIR, exist_ok=True)
             create_daily_backup(DATABASE_PATH, BACKUP_DIR)
             start_backup_scheduler(DATABASE_PATH, BACKUP_DIR)

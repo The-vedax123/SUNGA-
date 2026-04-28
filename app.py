@@ -26,7 +26,7 @@ except ImportError:
 from blockchain import Blockchain
 from backup import create_daily_backup, create_encrypted_backup, recover_encrypted_backup, start_backup_scheduler
 from security import generate_wallet_address, utc_now_iso
-from security.email_service import send_security_otp_email_async
+from security.email_service import EmailDeliveryError, send_security_otp_email
 from security.otp_service import (
     OTP_EXPIRY_SECONDS,
     OTP_MAX_ATTEMPTS,
@@ -975,7 +975,13 @@ def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
         clear_otp_session()
         flash("Unable to send OTP email. Check SMTP configuration.", "error")
         return False
-    send_security_otp_email_async(user_email, payload["otp_code"])
+    try:
+        send_security_otp_email(user_email, payload["otp_code"])
+    except EmailDeliveryError as error:
+        clear_otp_session()
+        logger.error("OTP email delivery failed for %s: %s", user_email, error)
+        flash("Unable to deliver OTP email. Verify SMTP credentials and try again.", "error")
+        return False
     log_otp_event(user_email, payload["otp_code"], "sent", attempts=0)
     flash("OTP sent to your registered email.", "success")
     return True
@@ -985,6 +991,10 @@ def otp_delivery_configured() -> bool:
     smtp_user = os.environ.get("SMTP_USER") or os.environ.get("EMAIL_USER")
     smtp_password = os.environ.get("SMTP_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
     return bool((smtp_user or "").strip() and (smtp_password or "").strip())
+
+
+def otp_strict_mode_enabled() -> bool:
+    return os.environ.get("OTP_STRICT_MODE", "").strip() == "1"
 
 
 def complete_login_without_otp(username: str, role: str, reason: str, next_url: str):
@@ -1123,9 +1133,11 @@ def login():
         )
         db.commit()
         if not issue_otp_challenge(user_row=user, next_url=url_for("dashboard"), purpose="login"):
-            if not otp_delivery_configured():
-                return complete_login_without_otp(username, user["role"], "SMTP not configured", url_for("dashboard"))
-            return render_template("login.html")
+            if otp_strict_mode_enabled():
+                flash("OTP delivery failed and strict mode is enabled. Contact support.", "error")
+                return render_template("login.html")
+            reason = "SMTP not configured" if not otp_delivery_configured() else "OTP delivery failed"
+            return complete_login_without_otp(username, user["role"], reason, url_for("dashboard"))
         return redirect(url_for("verify_otp"))
     return render_template("login.html")
 
@@ -1163,14 +1175,16 @@ def admin_login():
         )
         db.commit()
         if not issue_otp_challenge(user_row=user, next_url=url_for("admin_dashboard"), purpose="admin_login"):
-            if not otp_delivery_configured():
-                return complete_login_without_otp(
-                    username,
-                    user["role"],
-                    "SMTP not configured",
-                    url_for("admin_dashboard"),
-                )
-            return render_template("admin_login.html")
+            if otp_strict_mode_enabled():
+                flash("OTP delivery failed and strict mode is enabled. Contact support.", "error")
+                return render_template("admin_login.html")
+            reason = "SMTP not configured" if not otp_delivery_configured() else "OTP delivery failed"
+            return complete_login_without_otp(
+                username,
+                user["role"],
+                reason,
+                url_for("admin_dashboard"),
+            )
         return redirect(url_for("verify_otp"))
     return render_template("admin_login.html")
 

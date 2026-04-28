@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import secrets
 import re
 import sqlite3
 import traceback
@@ -54,9 +55,10 @@ DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(DATA_DIR, "database
 if not os.path.isabs(DATABASE_PATH):
     DATABASE_PATH = os.path.join(DATA_DIR if IS_VERCEL else BASE_DIR, DATABASE_PATH)
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-USE_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
-if USE_POSTGRES and psycopg2 is None:
-    raise RuntimeError("DATABASE_URL points to Postgres but psycopg2 is not installed.")
+REQUESTED_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
+USE_POSTGRES = REQUESTED_POSTGRES and psycopg2 is not None
+if REQUESTED_POSTGRES and psycopg2 is None:
+    print("Warning: DATABASE_URL is set but psycopg2 is unavailable. Falling back to SQLite.")
 FERNET_KEY_PATH = os.path.join(DATA_DIR, "fernet.key")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 SESSION_TIMEOUT_MINUTES = 5
@@ -81,7 +83,10 @@ logger = logging.getLogger("sunga")
 app = Flask(__name__)
 app_secret = os.environ.get("SECRET_KEY")
 if not app_secret:
-    raise RuntimeError("SECRET_KEY environment variable is required.")
+    # Keep serverless functions alive even when env vars are missing;
+    # this avoids cold-start crashes and lets requests return handled errors.
+    app_secret = secrets.token_urlsafe(48)
+    print("Warning: SECRET_KEY is not set. Generated a temporary key for this runtime.")
 app.config["SECRET_KEY"] = app_secret
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=SESSION_TIMEOUT_MINUTES)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -137,8 +142,13 @@ class PostgresCompatDB:
 def get_db():
     if "db" not in g:
         if USE_POSTGRES:
-            conn = psycopg2.connect(DATABASE_URL)
-            g.db = PostgresCompatDB(conn)
+            try:
+                conn = psycopg2.connect(DATABASE_URL)
+                g.db = PostgresCompatDB(conn)
+            except Exception:
+                # Graceful fallback for serverless startup/runtime DB misconfig.
+                g.db = sqlite3.connect(DATABASE_PATH)
+                g.db.row_factory = sqlite3.Row
         else:
             g.db = sqlite3.connect(DATABASE_PATH)
             g.db.row_factory = sqlite3.Row

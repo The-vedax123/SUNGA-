@@ -1,6 +1,7 @@
 import unittest
 import os
 from unittest.mock import patch
+import bcrypt
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 
@@ -15,9 +16,10 @@ class OtpFlowTests(unittest.TestCase):
         with app.app_context():
             init_db()
             db = get_db()
+            password_hash = bcrypt.hashpw("admin123!".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             db.execute(
-                "UPDATE users SET email = ?, status = 'Active' WHERE username = ?",
-                ("admin@example.com", "admin"),
+                "UPDATE users SET email = ?, status = 'Active', role = 'admin', password_hash = ?, login_attempts = 0, lock_until = NULL, locked_until = NULL WHERE username = ?",
+                ("admin@example.com", password_hash, "admin"),
             )
             db.commit()
 
@@ -72,6 +74,17 @@ class OtpFlowTests(unittest.TestCase):
         response = self.client.post("/resend-otp", follow_redirects=True)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(mock_issue.called)
+
+    @patch("app.otp_delivery_configured", return_value=False)
+    @patch("app.issue_otp_challenge", return_value=False)
+    def test_login_falls_back_when_otp_unavailable(self, _mock_issue, _mock_delivery):
+        response = self.client.post(
+            "/admin/login",
+            data={"username": "admin", "password": "admin123!"},
+            follow_redirects=False,
+        )
+        self.assertIn(response.status_code, (301, 302))
+        self.assertIn("/admin", response.headers.get("Location", ""))
 
 
 if __name__ == "__main__":

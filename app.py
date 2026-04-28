@@ -980,6 +980,19 @@ def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
     return True
 
 
+def otp_delivery_configured() -> bool:
+    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("EMAIL_USER")
+    smtp_password = os.environ.get("SMTP_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
+    return bool((smtp_user or "").strip() and (smtp_password or "").strip())
+
+
+def complete_login_without_otp(username: str, role: str, reason: str, next_url: str):
+    finalize_login(username, role)
+    log_action(username, f"Successful login without OTP: {reason}")
+    flash("Login successful. OTP is temporarily unavailable; configure SMTP to re-enable 2FA.", "warning")
+    return redirect(next_url)
+
+
 def finalize_login(username: str, role: str):
     session.clear()
     session["username"] = username
@@ -1109,6 +1122,8 @@ def login():
         )
         db.commit()
         if not issue_otp_challenge(user_row=user, next_url=url_for("dashboard"), purpose="login"):
+            if not otp_delivery_configured():
+                return complete_login_without_otp(username, user["role"], "SMTP not configured", url_for("dashboard"))
             return render_template("login.html")
         return redirect(url_for("verify_otp"))
     return render_template("login.html")
@@ -1147,6 +1162,13 @@ def admin_login():
         )
         db.commit()
         if not issue_otp_challenge(user_row=user, next_url=url_for("admin_dashboard"), purpose="admin_login"):
+            if not otp_delivery_configured():
+                return complete_login_without_otp(
+                    username,
+                    user["role"],
+                    "SMTP not configured",
+                    url_for("admin_dashboard"),
+                )
             return render_template("admin_login.html")
         return redirect(url_for("verify_otp"))
     return render_template("admin_login.html")

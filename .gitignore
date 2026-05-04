@@ -4,3 +4,4 @@ database.db
 fernet.key
 .env
 logs/
+backups/

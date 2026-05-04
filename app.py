@@ -17,16 +17,9 @@ from flask_wtf.csrf import CSRFProtect
 import qrcode
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-try:
-    import psycopg2
-    import psycopg2.extras
-except ImportError:
-    psycopg2 = None
-
 from blockchain import Blockchain
 from backup import create_daily_backup, create_encrypted_backup, recover_encrypted_backup, start_backup_scheduler
 from security import generate_wallet_address, utc_now_iso
-from security.email_service import EmailDeliveryError, send_security_otp_email
 from security.otp_service import (
     OTP_EXPIRY_SECONDS,
     OTP_MAX_ATTEMPTS,
@@ -54,11 +47,6 @@ DATA_DIR = os.environ.get("DATA_DIR", "/tmp" if IS_VERCEL else BASE_DIR)
 DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join(DATA_DIR, "database.db"))
 if not os.path.isabs(DATABASE_PATH):
     DATABASE_PATH = os.path.join(DATA_DIR if IS_VERCEL else BASE_DIR, DATABASE_PATH)
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-REQUESTED_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
-USE_POSTGRES = REQUESTED_POSTGRES and psycopg2 is not None
-if REQUESTED_POSTGRES and psycopg2 is None:
-    print("Warning: DATABASE_URL is set but psycopg2 is unavailable. Falling back to SQLite.")
 FERNET_KEY_PATH = os.path.join(DATA_DIR, "fernet.key")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 SESSION_TIMEOUT_MINUTES = 5
@@ -116,44 +104,10 @@ BOOTSTRAPPED = False
 BACKUP_SCHEDULER_STARTED = False
 
 
-def _qmark_to_pyformat(query: str) -> str:
-    if "?" not in query:
-        return query
-    parts = query.split("?")
-    return "%s".join(parts)
-
-
-class PostgresCompatDB:
-    def __init__(self, conn):
-        self._conn = conn
-
-    def execute(self, query, params=()):
-        cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(_qmark_to_pyformat(query), params)
-        return cursor
-
-    def commit(self):
-        self._conn.commit()
-
-    def close(self):
-        self._conn.close()
-
-
 def get_db():
     if "db" not in g:
-        if USE_POSTGRES:
-            try:
-                conn = psycopg2.connect(DATABASE_URL)
-                g.db = PostgresCompatDB(conn)
-            except Exception as error:
-                if IS_VERCEL:
-                    raise RuntimeError("Postgres connection failed on Vercel. Check DATABASE_URL.") from error
-                # Local/dev fallback to preserve developer ergonomics.
-                g.db = sqlite3.connect(DATABASE_PATH)
-                g.db.row_factory = sqlite3.Row
-        else:
-            g.db = sqlite3.connect(DATABASE_PATH)
-            g.db.row_factory = sqlite3.Row
+        g.db = sqlite3.connect(DATABASE_PATH)
+        g.db.row_factory = sqlite3.Row
     return g.db
 
 
@@ -174,17 +128,7 @@ def disable_browser_cache(response):
 
 def get_columns(table_name: str) -> set:
     db = get_db()
-    if USE_POSTGRES:
-        rows = db.execute(
-            """
-            SELECT column_name AS name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = ?
-            """,
-            (table_name,),
-        ).fetchall()
-    else:
-        rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
 
 
@@ -203,8 +147,6 @@ def generate_unique_wallet_address() -> str:
 
 
 def migrate_db():
-    if USE_POSTGRES:
-        return
     db = get_db()
     user_cols = get_columns("users")
     if "wallet_address" not in user_cols:
@@ -315,127 +257,6 @@ def migrate_db():
 
 def init_db():
     db = get_db()
-    if USE_POSTGRES:
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL CHECK(role IN ('admin', 'student')),
-                balance DOUBLE PRECISION NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                wallet_address TEXT,
-                full_name TEXT,
-                email TEXT,
-                phone TEXT,
-                status TEXT DEFAULT 'Active',
-                login_attempts INTEGER DEFAULT 0,
-                lock_until TEXT,
-                locked_until TEXT
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS transactions (
-                id SERIAL PRIMARY KEY,
-                sender TEXT,
-                receiver TEXT,
-                amount_enc TEXT,
-                sender_enc TEXT,
-                receiver_enc TEXT,
-                fee_amount DOUBLE PRECISION DEFAULT 0,
-                hash TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                status TEXT DEFAULT 'completed'
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS logs (
-                id SERIAL PRIMARY KEY,
-                user TEXT NOT NULL,
-                action TEXT NOT NULL,
-                timestamp TEXT NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS alerts (
-                id SERIAL PRIMARY KEY,
-                user TEXT NOT NULL,
-                amount DOUBLE PRECISION NOT NULL,
-                reason TEXT NOT NULL,
-                severity TEXT,
-                timestamp TEXT NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS error_logs (
-                id SERIAL PRIMARY KEY,
-                user TEXT NOT NULL,
-                route TEXT NOT NULL,
-                error_message TEXT NOT NULL,
-                timestamp TEXT NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS failed_logins (
-                id SERIAL PRIMARY KEY,
-                username TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                ip_address TEXT NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS locked_funds (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER,
-                amount DECIMAL(10,2),
-                release_date TEXT,
-                status TEXT DEFAULT 'locked',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notifications (
-                id SERIAL PRIMARY KEY,
-                username TEXT NOT NULL,
-                message TEXT NOT NULL,
-                is_read INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS otp_logs (
-                id SERIAL PRIMARY KEY,
-                user_email TEXT NOT NULL,
-                otp_code TEXT NOT NULL,
-                status TEXT NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                verified_at TEXT
-            )
-            """
-        )
-        db.commit()
-        seed_admin()
-        backfill_wallet_addresses()
-        migrate_transaction_encryption()
-        return
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -718,6 +539,59 @@ def is_account_locked(user_row) -> bool:
         return False
 
 
+def clear_expired_login_lock(db, username: str) -> None:
+    """After the lock window ends, reset counters so one typo does not immediately re-lock."""
+    row = db.execute(
+        "SELECT lock_until, locked_until FROM users WHERE username = ?",
+        (username,),
+    ).fetchone()
+    if not row:
+        return
+    locked_until = row["lock_until"] if row["lock_until"] else row["locked_until"]
+    if not locked_until:
+        return
+    try:
+        until = datetime.fromisoformat(str(locked_until))
+    except ValueError:
+        # Bad timestamp in DB — clear so the account is not stuck
+        db.execute(
+            "UPDATE users SET login_attempts = 0, lock_until = NULL, locked_until = NULL WHERE username = ?",
+            (username,),
+        )
+        db.commit()
+        return
+    now = datetime.now(UTC).replace(tzinfo=None)
+    # Real lockouts are LOGIN_LOCK_MINUTES; far-future values are test/corrupt data.
+    max_legitimate_lock_end = now + timedelta(minutes=LOGIN_LOCK_MINUTES + 1)
+    if until > max_legitimate_lock_end:
+        db.execute(
+            "UPDATE users SET login_attempts = 0, lock_until = NULL, locked_until = NULL WHERE username = ?",
+            (username,),
+        )
+        db.commit()
+        return
+    if now < until:
+        return
+    db.execute(
+        "UPDATE users SET login_attempts = 0, lock_until = NULL, locked_until = NULL WHERE username = ?",
+        (username,),
+    )
+    db.commit()
+
+
+def login_lock_flash_detail(user_row) -> str:
+    locked_until = user_row["lock_until"] if "lock_until" in user_row.keys() and user_row["lock_until"] else None
+    if not locked_until and "locked_until" in user_row.keys():
+        locked_until = user_row["locked_until"]
+    if not locked_until:
+        return ""
+    try:
+        until = datetime.fromisoformat(str(locked_until))
+    except ValueError:
+        return ""
+    return f" You can try again after {until.strftime('%Y-%m-%d %H:%M')} UTC."
+
+
 def risk_level(amount: float) -> str:
     return "LOW" if amount <= FRAUD_THRESHOLD else "HIGH"
 
@@ -796,32 +670,23 @@ def perform_transaction(sender: str, receiver_wallet: str, amount: float, *, is_
         return False, "Blockchain integrity check failed. Transaction cancelled."
     sender_enc, receiver_enc, amount_enc = encrypt_transaction_fields(sender, receiver_user["username"], amount)
     try:
-        if USE_POSTGRES:
+        with db:
             db.execute("UPDATE users SET balance = balance - ? WHERE username = ?", (total, sender))
             db.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (amount, receiver_user["username"]))
             db.execute(
                 "INSERT INTO transactions (sender, receiver, sender_enc, receiver_enc, amount_enc, fee_amount, hash, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (sender, receiver_user["username"], sender_enc, receiver_enc, amount_enc, fee, tx_block.block_hash, timestamp, "completed"),
+                (
+                    sender,
+                    receiver_user["username"],
+                    sender_enc,
+                    receiver_enc,
+                    amount_enc,
+                    fee,
+                    tx_block.block_hash,
+                    timestamp,
+                    "completed",
+                ),
             )
-            db.commit()
-        else:
-            with db:
-                db.execute("UPDATE users SET balance = balance - ? WHERE username = ?", (total, sender))
-                db.execute("UPDATE users SET balance = balance + ? WHERE username = ?", (amount, receiver_user["username"]))
-                db.execute(
-                    "INSERT INTO transactions (sender, receiver, sender_enc, receiver_enc, amount_enc, fee_amount, hash, timestamp, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        sender,
-                        receiver_user["username"],
-                        sender_enc,
-                        receiver_enc,
-                        amount_enc,
-                        fee,
-                        tx_block.block_hash,
-                        timestamp,
-                        "completed",
-                    ),
-                )
     except Exception:
         log_action(sender, "Transaction failed due to database error.")
         return False, "Could not complete transaction safely."
@@ -954,14 +819,15 @@ def otp_rate_limited() -> bool:
     return False
 
 
-def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
-    user_email = user_row["email"] if "email" in user_row.keys() else None
-    if not user_email:
-        flash("No email is registered on this account for OTP.", "error")
-        return False
+def issue_otp_challenge(*, user_row, next_url: str, purpose: str, log_status: str = "issued"):
     if otp_rate_limited():
         flash("Too many OTP requests. Try again later.", "error")
         return False
+    user_email = ""
+    if "email" in user_row.keys() and user_row["email"]:
+        user_email = str(user_row["email"]).strip()
+    if not user_email:
+        user_email = user_row["username"]
     payload = build_otp_session_payload(
         username=user_row["username"],
         role=user_row["role"],
@@ -971,28 +837,13 @@ def issue_otp_challenge(*, user_row, next_url: str, purpose: str):
     )
     for key, value in payload.items():
         session[key] = value
-    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("EMAIL_USER")
-    smtp_password = os.environ.get("SMTP_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-    if not smtp_user or not smtp_password:
-        clear_otp_session()
-        flash("Unable to send OTP email. Check SMTP configuration.", "error")
-        return False
-    try:
-        send_security_otp_email(user_email, payload["otp_code"])
-    except EmailDeliveryError as error:
-        clear_otp_session()
-        logger.error("OTP email delivery failed for %s: %s", user_email, error)
-        flash("Unable to deliver OTP email. Verify SMTP credentials and try again.", "error")
-        return False
-    log_otp_event(user_email, payload["otp_code"], "sent", attempts=0)
-    flash("OTP sent to your registered email.", "success")
+    log_otp_event(user_email, payload["otp_code"], log_status, attempts=0)
+    logger.info("OTP issued for %s (purpose=%s)", user_row["username"], purpose)
+    flash(
+        f"Your verification code is {payload['otp_code']}. It expires in {OTP_EXPIRY_MINUTES} minute(s).",
+        "success",
+    )
     return True
-
-
-def otp_delivery_configured() -> bool:
-    smtp_user = os.environ.get("SMTP_USER") or os.environ.get("EMAIL_USER")
-    smtp_password = os.environ.get("SMTP_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-    return bool((smtp_user or "").strip() and (smtp_password or "").strip())
 
 
 def otp_strict_mode_enabled() -> bool:
@@ -1000,21 +851,14 @@ def otp_strict_mode_enabled() -> bool:
 
 
 def ensure_runtime_db_ready() -> bool:
-    if not IS_VERCEL:
-        return True
-    if USE_POSTGRES:
-        return True
-    if REQUESTED_POSTGRES and psycopg2 is None:
-        flash("Server database adapter is missing. Redeploy after installing psycopg2-binary.", "error")
-        return False
-    flash("Server database is not configured. Set DATABASE_URL to Postgres in Vercel.", "error")
-    return False
+    """SQLite is always used; database file lives under DATA_DIR (e.g. /tmp on Vercel)."""
+    return True
 
 
 def complete_login_without_otp(username: str, role: str, reason: str, next_url: str):
     finalize_login(username, role)
     log_action(username, f"Successful login without OTP: {reason}")
-    flash("Login successful. OTP is temporarily unavailable; configure SMTP to re-enable 2FA.", "warning")
+    flash("Login successful. OTP step was skipped.", "warning")
     return redirect(next_url)
 
 
@@ -1133,8 +977,17 @@ def login():
             log_action(username or "unknown", "Login failure: unknown username.")
             flash("Invalid username or password.", "error")
             return render_template("login.html")
+        clear_expired_login_lock(db, user["username"])
+        user = db.execute(
+            "SELECT username, password_hash, role, locked_until, lock_until, status, email, login_attempts FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
         if is_account_locked(user):
-            flash("Account temporarily locked due to multiple failed login attempts.", "error")
+            flash(
+                "Account temporarily locked due to multiple failed login attempts."
+                + login_lock_flash_detail(user),
+                "error",
+            )
             return render_template("login.html")
         if user["status"] != "Active":
             flash("Account is currently suspended. Contact admin.", "error")
@@ -1154,7 +1007,7 @@ def login():
             if otp_strict_mode_enabled():
                 flash("OTP delivery failed and strict mode is enabled. Contact support.", "error")
                 return render_template("login.html")
-            reason = "SMTP not configured" if not otp_delivery_configured() else "OTP delivery failed"
+            reason = "OTP challenge could not be issued"
             return complete_login_without_otp(username, user["role"], reason, url_for("dashboard"))
         return redirect(url_for("verify_otp"))
     return render_template("login.html")
@@ -1180,8 +1033,17 @@ def admin_login():
         if user["status"] != "Active":
             flash("Admin account is not active.", "error")
             return render_template("admin_login.html")
+        clear_expired_login_lock(db, user["username"])
+        user = db.execute(
+            "SELECT username, password_hash, role, locked_until, lock_until, status, email, login_attempts FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
         if is_account_locked(user):
-            flash("Account temporarily locked due to multiple failed login attempts.", "error")
+            flash(
+                "Account temporarily locked due to multiple failed login attempts."
+                + login_lock_flash_detail(user),
+                "error",
+            )
             return render_template("admin_login.html")
         valid_password = bcrypt.checkpw(password.encode("utf-8"), user["password_hash"].encode("utf-8"))
         if not valid_password:
@@ -1198,7 +1060,7 @@ def admin_login():
             if otp_strict_mode_enabled():
                 flash("OTP delivery failed and strict mode is enabled. Contact support.", "error")
                 return render_template("admin_login.html")
-            reason = "SMTP not configured" if not otp_delivery_configured() else "OTP delivery failed"
+            reason = "OTP challenge could not be issued"
             return complete_login_without_otp(
                 username,
                 user["role"],
@@ -1240,12 +1102,12 @@ def resend_otp():
         clear_otp_session()
         flash("Unable to resend OTP for this account.", "error")
         return redirect(url_for("login"))
-    if issue_otp_challenge(
+    issue_otp_challenge(
         user_row=user,
         next_url=session.get("otp_next", url_for("dashboard")),
         purpose=session.get("otp_purpose", "login"),
-    ):
-        log_otp_event(user["email"], session.get("otp_code"), "resent", attempts=0)
+        log_status="resent",
+    )
     return redirect(url_for("verify_otp"))
 
 

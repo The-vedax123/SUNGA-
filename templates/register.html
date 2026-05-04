@@ -29,10 +29,18 @@
                 <p class="small-muted">Username must be 3-20 characters and contain letters/numbers only.</p>
                 <label>Email</label><input name="email" type="email" required maxlength="120">
                 <label>Phone Number</label><input id="phone" name="phone" type="text" required maxlength="20" pattern="[0-9+\-\s]{7,20}">
-                <label>Password</label><input id="password" name="password" type="password" required minlength="8" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}" title="Minimum 8 characters, with uppercase, lowercase, number, and special character." placeholder="e.g. Sunga@2026">
+                <label for="password">Password</label>
+                <div class="password-field-wrap">
+                    <input id="password" name="password" type="password" required minlength="8" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}" title="Minimum 8 characters, with uppercase, lowercase, number, and special character." placeholder="e.g. Sunga@2026" autocomplete="new-password">
+                    <button type="button" class="btn-secondary btn-password-toggle" data-password-toggle aria-controls="password" aria-pressed="false" aria-label="Show password">Show</button>
+                </div>
                 <p class="small-muted">Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character.</p>
                 <p id="passwordStrength" class="status-attention">Strength: Weak</p>
-                <label>Confirm Password</label><input id="confirm_password" name="confirm_password" type="password" required minlength="8">
+                <label for="confirm_password">Confirm Password</label>
+                <div class="password-field-wrap">
+                    <input id="confirm_password" name="confirm_password" type="password" required minlength="8" autocomplete="new-password">
+                    <button type="button" class="btn-secondary btn-password-toggle" data-password-toggle aria-controls="confirm_password" aria-pressed="false" aria-label="Show confirm password">Show</button>
+                </div>
                 <p id="confirmPasswordMsg" class="status-attention">Confirm password to continue.</p>
                 <button type="submit">Create Account</button>
             </form>
@@ -54,5 +62,6 @@ p.addEventListener("input",()=>{let s="Weak",cls="status-warning"; if(p.value.le
 function sync(){if(!c.value){m.className="status-attention";m.textContent="Confirm password to continue.";} else if(c.value===p.value){m.className="status-secure";m.textContent="Passwords match.";} else {m.className="status-warning";m.textContent="Passwords do not match.";}}
 p.addEventListener("input",sync); c.addEventListener("input",sync);
 </script>
+<script src="{{ url_for('static', filename='auth-password-toggle.js') }}"></script>
 </body>
 </html>

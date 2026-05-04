@@ -3,7 +3,6 @@ bcrypt
 cryptography
 reportlab
 qrcode
-psycopg2-binary
 python-dotenv
 schedule
 flask-wtf

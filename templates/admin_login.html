@@ -18,13 +18,18 @@
             {% endwith %}
             <form method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <label>Admin Username</label><input name="username" type="text" required maxlength="20">
-                <label>Password</label><input name="password" type="password" required minlength="8">
+                <label for="admin-username">Admin Username</label><input id="admin-username" name="username" type="text" required maxlength="20">
+                <label for="admin-password">Password</label>
+                <div class="password-field-wrap">
+                    <input id="admin-password" name="password" type="password" required minlength="8" autocomplete="current-password">
+                    <button type="button" class="btn-secondary btn-password-toggle" data-password-toggle aria-controls="admin-password" aria-pressed="false" aria-label="Show password">Show</button>
+                </div>
                 <button type="submit">Continue as Admin</button>
             </form>
             <p class="small-muted">Admin access requires OTP verification after password check.</p>
             <p><a href="{{ url_for('login') }}">Back to user login</a></p>
         </section>
     </div>
+    <script src="{{ url_for('static', filename='auth-password-toggle.js') }}"></script>
 </body>
 </html>

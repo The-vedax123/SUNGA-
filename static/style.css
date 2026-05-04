@@ -308,6 +308,28 @@ label {
     font-weight: 600;
 }
 
+.password-field-wrap {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 2px;
+}
+
+.password-field-wrap input {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+}
+
+.password-field-wrap .btn-password-toggle {
+    margin-top: 0;
+    flex-shrink: 0;
+    align-self: center;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
 input,
 select,
 textarea {
@@ -832,7 +854,7 @@ textarea:focus-visible {
     background-image: url("/static/landing-wallet.png");
     background-size: cover;
     background-position: center;
-    opacity: 0.12;
+    opacity: 0.28;
     pointer-events: none;
 }
 
@@ -840,12 +862,12 @@ textarea:focus-visible {
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, rgba(0, 0, 0, 0.76) 25%, rgba(0, 0, 0, 0.38) 100%);
+    background: linear-gradient(90deg, rgba(0, 0, 0, 0.58) 25%, rgba(0, 0, 0, 0.24) 100%);
     pointer-events: none;
 }
 
 body.light .landing-hero--with-bg::after {
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.82) 20%, rgba(255, 255, 255, 0.55) 100%);
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.62) 20%, rgba(255, 255, 255, 0.34) 100%);
 }
 
 .landing-hero--with-bg .landing-hero-grid {

@@ -75,9 +75,8 @@ class OtpFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(mock_issue.called)
 
-    @patch("app.otp_delivery_configured", return_value=False)
     @patch("app.issue_otp_challenge", return_value=False)
-    def test_login_falls_back_when_otp_unavailable(self, _mock_issue, _mock_delivery):
+    def test_login_falls_back_when_otp_unavailable(self, _mock_issue):
         response = self.client.post(
             "/admin/login",
             data={"username": "admin", "password": "admin123!"},
@@ -86,7 +85,7 @@ class OtpFlowTests(unittest.TestCase):
         self.assertIn(response.status_code, (301, 302))
         self.assertIn("/admin", response.headers.get("Location", ""))
 
-    def test_admin_login_handles_sqlite_row_and_falls_back_without_smtp(self):
+    def test_admin_login_issues_otp_without_smtp(self):
         with patch.dict(
             os.environ,
             {"SMTP_USER": "", "SMTP_PASSWORD": "", "EMAIL_USER": "", "EMAIL_PASSWORD": ""},
@@ -98,17 +97,17 @@ class OtpFlowTests(unittest.TestCase):
                 follow_redirects=False,
             )
         self.assertIn(response.status_code, (301, 302))
-        self.assertIn("/admin", response.headers.get("Location", ""))
+        self.assertIn("verify-otp", response.headers.get("Location", ""))
 
-    def test_login_shows_db_configuration_error_on_vercel_without_postgres(self):
-        with patch("app.IS_VERCEL", True), patch("app.USE_POSTGRES", False), patch("app.REQUESTED_POSTGRES", False):
+    def test_login_on_vercel_uses_sqlite(self):
+        with patch("app.IS_VERCEL", True):
             response = self.client.post(
                 "/login",
                 data={"username": "admin", "password": "admin123!"},
-                follow_redirects=True,
+                follow_redirects=False,
             )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Server database is not configured. Set DATABASE_URL to Postgres in Vercel.", response.data)
+        self.assertIn(response.status_code, (301, 302))
+        self.assertIn("verify-otp", response.headers.get("Location", ""))
 
 
 if __name__ == "__main__":

@@ -24,8 +24,12 @@
             {% endwith %}
             <form method="POST" id="loginForm">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <label>Username</label><input name="username" type="text" required maxlength="30">
-                <label>Password</label><input name="password" type="password" required minlength="8">
+                <label for="login-username">Username</label><input id="login-username" name="username" type="text" required maxlength="30">
+                <label for="login-password">Password</label>
+                <div class="password-field-wrap">
+                    <input id="login-password" name="password" type="password" required minlength="8" autocomplete="current-password">
+                    <button type="button" class="btn-secondary btn-password-toggle" data-password-toggle aria-controls="login-password" aria-pressed="false" aria-label="Show password">Show</button>
+                </div>
                 <button type="submit">Continue</button>
             </form>
             <a class="btn-inline btn-secondary" href="{{ url_for('index') }}">Back to Home</a>
@@ -45,5 +49,6 @@ themeToggle.addEventListener("change", () => {
     localStorage.setItem("theme", theme);
 });
 </script>
+<script src="{{ url_for('static', filename='auth-password-toggle.js') }}"></script>
 </body>
 </html>
